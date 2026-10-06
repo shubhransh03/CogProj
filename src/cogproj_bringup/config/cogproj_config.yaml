@@ -1,0 +1,35 @@
+# CogProj Master Configuration Profile
+# Phase 3: Camera Pipeline, Detection, Tracking, and Counting
+
+camera_input_node:
+  ros__parameters:
+    input_topic: "/pi_camera/image_raw"
+    output_topic: "/cogproj/image_raw"
+
+detection_node:
+  ros__parameters:
+    enabled: false
+    test_mode: false
+    image_topic: "/cogproj/image_raw"
+    detection_topic: "/cogproj/detections"
+    model_directory: ""
+    model_plugin_path: ""
+    model_config_path: ""
+    confidence_threshold: 0.60
+
+tracking_node:
+  ros__parameters:
+    input_topic: "/cogproj/detections"
+    output_topic: "/cogproj/tracked_ores"
+    max_centroid_distance_px: 50.0
+    min_iou: 0.10
+    max_missed_frames: 5
+    min_confirmed_hits: 3
+    use_odom: false
+    odom_topic: "/odometry/filtered"
+
+counting_node:
+  ros__parameters:
+    input_topic: "/cogproj/tracked_ores"
+    output_topic: "/cogproj/counts_summary"
+    counting_enabled: true

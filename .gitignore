@@ -1,0 +1,37 @@
+# ROS 2 build artifacts
+build/
+install/
+log/
+
+# Python cache and bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Testing and coverage
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Package distributions and eggs
+*.egg-info/
+dist/
+*.egg
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+env/
+
+# Environment configurations and secrets
+.env
+.env.*
+*.key
+*.pem
+
+# Editor settings
+.vscode/
+.idea/
+
