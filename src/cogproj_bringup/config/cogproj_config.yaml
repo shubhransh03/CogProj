@@ -1,5 +1,5 @@
 # CogProj Master Configuration Profile
-# Phase 3: Camera Pipeline, Detection, Tracking, and Counting
+# Phase 4: Camera Pipeline, Detection, Tracking, Counting, and Visualization
 
 camera_input_node:
   ros__parameters:
@@ -33,3 +33,17 @@ counting_node:
     input_topic: "/cogproj/tracked_ores"
     output_topic: "/cogproj/counts_summary"
     counting_enabled: true
+
+visualizer_node:
+  ros__parameters:
+    image_topic: "/cogproj/image_raw"
+    detection_topic: "/cogproj/detections"
+    tracking_topic: "/cogproj/tracked_ores"
+    count_topic: "/cogproj/counts_summary"
+    annotated_topic: "/cogproj/image_annotated"
+    compressed_topic: "/cogproj/image_annotated/compressed"
+    camera_timeout_sec: 2.0
+    detection_timeout_sec: 2.0
+    tracking_timeout_sec: 2.0
+    count_timeout_sec: 5.0
+    jpeg_quality: 80
