@@ -8,14 +8,18 @@ camera_input_node:
 
 detection_node:
   ros__parameters:
+    # Master switch: disabled by default (safe state)
     enabled: false
     test_mode: false
     image_topic: "/cogproj/image_raw"
     detection_topic: "/cogproj/detections"
+    # Real ONNX model plugin path (e.g. /home/veerobot/CogProj/models/ore_yolo)
+    # Model classes: 0: "resource", 1: "host_rock"
     model_directory: ""
     model_plugin_path: ""
     model_config_path: ""
     confidence_threshold: 0.60
+    # NMS threshold is configured within model adapter config.yaml (default: 0.40)
 
 tracking_node:
   ros__parameters:

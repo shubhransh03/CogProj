@@ -35,3 +35,16 @@ env/
 .vscode/
 .idea/
 
+# Model weights and ML artifacts (avoid committing large binary files)
+*.pt
+*.pth
+*.onnx
+*.tflite
+*.engine
+*.weights
+*.pb
+*.h5
+*.savedmodel
+models/*/weights/
+models/*/
+

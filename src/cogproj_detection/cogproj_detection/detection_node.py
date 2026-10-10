@@ -12,6 +12,7 @@ import cv_bridge
 from cv_bridge import CvBridge
 import rclpy
 from rclpy.node import Node
+from rclpy.parameter import Parameter
 from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy
 from sensor_msgs.msg import Image
 from std_msgs.msg import Header
@@ -43,6 +44,7 @@ class DetectionNode(Node):
         self.declare_parameter("model_plugin_path", "")
         self.declare_parameter("model_config_path", "")
         self.declare_parameter("confidence_threshold", 0.60)
+        self.declare_parameter("detector_status", "DISABLED")
 
         # Retrieve parameter values
         self.enabled = self.get_parameter("enabled").get_parameter_value().bool_value
@@ -56,6 +58,7 @@ class DetectionNode(Node):
 
         self.bridge = CvBridge()
         self.detector: Optional[BaseOreDetector] = None
+        self.detector_status: str = "DISABLED"
 
         # Setup QoS for detection topic (sensor data profile)
         qos_profile = QoSProfile(
@@ -88,6 +91,7 @@ class DetectionNode(Node):
 
         # State A: Disabled by default (Safe state)
         if not self.enabled:
+            self._set_detector_status("DISABLED")
             self.get_logger().info(
                 "Detection is DISABLED by default (safe state). "
                 "Set parameter 'enabled: true' to activate inference."
@@ -97,55 +101,100 @@ class DetectionNode(Node):
         # If enabled, initialize detector plugin or test mock
         self._initialize_detector()
 
+    @property
+    def status(self) -> str:
+        """Return the current detector status string."""
+        return self.detector_status
+
+    def _set_detector_status(self, status_val: str) -> bool:
+        """Update internal status and ROS 2 parameter.
+
+        Returns:
+            True if the ROS 2 parameter was successfully set, False otherwise.
+        """
+        self.detector_status = status_val
+        try:
+            results = self.set_parameters([Parameter("detector_status", Parameter.Type.STRING, status_val)])
+            if results and not results[0].successful:
+                self.get_logger().warn(
+                    f"Failed to update 'detector_status' parameter to '{status_val}': {results[0].reason}"
+                )
+                return False
+            return True
+        except Exception as e:
+            self.get_logger().warn(
+                f"Exception updating 'detector_status' parameter to '{status_val}': {e}"
+            )
+            return False
+
     def _initialize_detector(self) -> bool:
         """Attempt to load the detector plugin or test mock."""
         # State C: Test / Mock Mode
         if self.test_mode:
-            self.detector = MockDetector()
-            self.detector.load("/tmp/mock_model")
-            self.get_logger().info(
-                "============================================================"
-            )
-            self.get_logger().info(
-                "[TEST/MOCK MODE ACTIVE] Using MockDetector with synthetic test detections."
-            )
-            self.get_logger().info(
-                "No machine learning framework or real model is loaded."
-            )
-            self.get_logger().info(
-                "============================================================"
-            )
-            return True
+            try:
+                mock_inst = MockDetector()
+                load_ok = mock_inst.load("/tmp/mock_model")
+                if not load_ok:
+                    self.detector = None
+                    self._set_detector_status("ERROR_LOAD_FAILED")
+                    self.get_logger().error("MockDetector load() returned False.")
+                    return False
+                self.detector = mock_inst
+                self._set_detector_status("MOCK")
+                self.get_logger().info(
+                    "============================================================"
+                )
+                self.get_logger().info(
+                    "[TEST/MOCK MODE ACTIVE] Using MockDetector with synthetic test detections."
+                )
+                self.get_logger().info(
+                    "No machine learning framework or real model is loaded."
+                )
+                self.get_logger().info(
+                    "============================================================"
+                )
+                return True
+            except Exception as e:
+                self.detector = None
+                self._set_detector_status("ERROR_LOAD_FAILED")
+                self.get_logger().error(f"Failed to initialize MockDetector: {e}")
+                return False
 
         # State B: Enabled but no model configured (Fail safely without crash)
         if not self.model_dir:
+            self.detector = None
+            self._set_detector_status("ERROR_NO_MODEL")
             self.get_logger().error(
                 "SAFE FAILURE: Detection is enabled but 'model_directory' is empty. "
                 "No detector loaded. Detection will not execute on incoming frames."
             )
-            self.detector = None
             return False
 
         # State D: Real plugin mode (Dynamic loading from model directory)
         self.get_logger().info(f"Attempting to load detector from: '{self.model_dir}'")
         try:
-            self.detector = load_detector_plugin(
+            plugin_inst = load_detector_plugin(
                 model_dir=self.model_dir,
                 config_path=self.model_config_path or None,
                 auto_init=True,
             )
-            metadata = self.detector.get_metadata()
+            metadata = plugin_inst.get_metadata()
+            model_name = metadata.get("model_name", "Unknown") if isinstance(metadata, dict) else "Unknown"
+            self.detector = plugin_inst
+            self._set_detector_status(f"REAL:{model_name}")
             self.get_logger().info(
-                f"Successfully loaded detector plugin: {metadata.get('model_name', 'Unknown')}"
+                f"Successfully loaded detector plugin: {model_name}"
             )
             return True
         except PluginError as e:
-            self.get_logger().error(f"Failed to load detector plugin: {e}")
             self.detector = None
+            self._set_detector_status("ERROR_LOAD_FAILED")
+            self.get_logger().error(f"Failed to load detector plugin: {e}")
             return False
         except Exception as e:
-            self.get_logger().error(f"Unexpected error loading detector plugin: {e}")
             self.detector = None
+            self._set_detector_status("ERROR_LOAD_FAILED")
+            self.get_logger().error(f"Unexpected error loading detector plugin: {e}")
             return False
 
     def _image_callback(self, msg: Image) -> None:
@@ -221,6 +270,7 @@ class DetectionNode(Node):
             except Exception as e:
                 self.get_logger().warn(f"Exception during detector unload: {e}")
             self.detector = None
+        self._set_detector_status("UNLOADED")
         super().destroy_node()
 
 

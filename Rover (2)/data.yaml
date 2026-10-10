@@ -1,0 +1,8 @@
+path: dataset
+
+train: images/train
+val: images/val
+
+names:
+  0: resource
+  1: host_rock

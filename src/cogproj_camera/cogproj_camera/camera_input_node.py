@@ -88,12 +88,12 @@ class CameraInputNode(Node):
         out_msg = Image()
         out_msg.header.stamp = msg.header.stamp
         out_msg.header.frame_id = msg.header.frame_id
-        out_msg.height = msg.height
-        out_msg.width = msg.width
+        out_msg.height = int(cv_frame.shape[0])
+        out_msg.width = int(cv_frame.shape[1])
         out_msg.encoding = "bgr8"
         out_msg.is_bigendian = msg.is_bigendian
-        out_msg.step = msg.step
-        out_msg.data = msg.data
+        out_msg.step = int(cv_frame.shape[1] * 3)
+        out_msg.data = cv_frame.tobytes()
 
         self.image_pub.publish(out_msg)
         self.frame_count += 1

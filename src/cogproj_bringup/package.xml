@@ -11,6 +11,9 @@
   <exec_depend>cogproj_detector_base</exec_depend>
   <exec_depend>cogproj_detection</exec_depend>
   <exec_depend>cogproj_camera</exec_depend>
+  <exec_depend>cogproj_tracking</exec_depend>
+  <exec_depend>cogproj_counting</exec_depend>
+  <exec_depend>cogproj_visualization</exec_depend>
 
   <test_depend>ament_copyright</test_depend>
   <test_depend>ament_flake8</test_depend>
