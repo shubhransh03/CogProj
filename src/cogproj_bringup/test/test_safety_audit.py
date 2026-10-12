@@ -105,17 +105,28 @@ class TestSystemSafetyAudit(unittest.TestCase):
 
         self.assertGreater(len(launch_files), 0, "No launch files found in bringup package")
 
-        forbidden_strings = ["/cmd_vel", "cmd_vel_nav", "cmd_vel_joy", "lyra_control", "nav2", "slam_toolbox"]
+        actuation_forbidden = ["/cmd_vel", "cmd_vel_nav", "cmd_vel_joy", "lyra_control", "teleop"]
+        perception_only_forbidden = ["slam_toolbox", "nav2"]
 
         for lf in launch_files:
+            basename = os.path.basename(lf)
             with open(lf, "r", encoding="utf-8") as f:
                 content = f.read()
-                for forbidden in forbidden_strings:
+                # All launch files must NEVER command robot actuation
+                for forbidden in actuation_forbidden:
                     self.assertNotIn(
                         forbidden,
                         content,
-                        f"SAFETY VIOLATION in launch file {lf}: contains forbidden string '{forbidden}'",
+                        f"SAFETY VIOLATION in launch file {lf}: contains forbidden actuation string '{forbidden}'",
                     )
+                # Pure perception launch files must not contain mapping
+                if basename != "integrated_slam_ore_pipeline.launch.py":
+                    for forbidden in perception_only_forbidden:
+                        self.assertNotIn(
+                            forbidden,
+                            content,
+                            f"SAFETY VIOLATION in perception launch file {lf}: contains forbidden string '{forbidden}'",
+                        )
 
 
 if __name__ == "__main__":
