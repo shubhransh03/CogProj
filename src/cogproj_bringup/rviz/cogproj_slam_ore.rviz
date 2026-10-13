@@ -142,6 +142,26 @@ Visualization Manager:
         Value: /map_updates
       Use Timestamp: false
       Value: true
+    - Alpha: 0.7
+      Class: rviz_default_plugins/Map
+      Color Scheme: map
+      Draw Behind: false
+      Enabled: false
+      Name: SimulatedDemoMap
+      Topic:
+        Depth: 5
+        Durability Policy: Transient Local
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /cogproj/demo_simulated_map
+      Update Topic:
+        Depth: 5
+        Durability Policy: Transient Local
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /cogproj/demo_simulated_map_updates
+      Use Timestamp: false
+      Value: false
     - Class: rviz_default_plugins/MarkerArray
       Enabled: true
       Name: SpatialOreMarkers
@@ -170,6 +190,36 @@ Visualization Manager:
         Value: /cogproj/image_annotated
       Transport Hint: raw
       Value: true
+    - Class: rviz_default_plugins/Image
+      Enabled: false
+      Max Value: 1
+      Median window: 5
+      Min Value: 0
+      Name: ImageRawCamera
+      Normalize Range: false
+      Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Best Effort
+        Value: /camera/image_raw
+      Transport Hint: raw
+      Value: false
+    - Class: rviz_default_plugins/Image
+      Enabled: false
+      Max Value: 1
+      Median window: 5
+      Min Value: 0
+      Name: ImageCogProjRaw
+      Normalize Range: false
+      Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Best Effort
+        Value: /cogproj/image_raw
+      Transport Hint: raw
+      Value: false
     - Alpha: 1
       Class: rviz_default_plugins/Odometry
       Color: 255; 25; 0

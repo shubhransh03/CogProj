@@ -10,7 +10,15 @@ from builtin_interfaces.msg import Time as MsgTime
 from sensor_msgs.msg import CompressedImage, Image
 from std_msgs.msg import Header
 
-from cogproj_interfaces.msg import Detection, DetectionArray, OreCountSummary, TrackedOre, TrackedOreArray
+from cogproj_interfaces.msg import (
+    Detection,
+    DetectionArray,
+    OreCountSummary,
+    SpatialOre,
+    SpatialOreArray,
+    TrackedOre,
+    TrackedOreArray,
+)
 from cogproj_visualization import CogprojViewer, PerceptionAnnotator, VisualizerNode
 
 
@@ -275,6 +283,60 @@ class TestVisualizerNode(unittest.TestCase):
         """22. Node has zero publishers on actuation topics."""
         for pub in self.node.publishers:
             self.assertNotIn("cmd_vel", pub.topic_name)
+
+    def test_23_spatial_callback_in_visualizer_node(self):
+        """23. Spatial callback updates localized count and status."""
+        spatial_msg = SpatialOreArray()
+        spatial_msg.localized_count = 2
+        spatial_msg.unlocalized_count = 1
+        ore = SpatialOre()
+        ore.track_id = 1
+        ore.localization_status = "LOCALIZED"
+        spatial_msg.ores = [ore]
+
+        self.node._spatial_callback(spatial_msg)
+        self.assertEqual(self.node.latest_localized_count, 2)
+        self.assertEqual(self.node.latest_localization_status, "LOCALIZED")
+
+    def test_24_detection_callback_updates_raw_count(self):
+        """24. Detection callback records count of raw detections."""
+        det_msg = DetectionArray()
+        d1 = Detection()
+        d2 = Detection()
+        det_msg.detections = [d1, d2]
+
+        self.node._det_callback(det_msg)
+        self.assertEqual(self.node.latest_raw_detections_count, 2)
+
+    def test_25_mode_badge_rendered_in_mock_and_real(self):
+        """25. PerceptionAnnotator renders mode badges for MOCK and REAL modes."""
+        annotator = PerceptionAnnotator()
+        blank = np.zeros((240, 320, 3), dtype=np.uint8)
+
+        mock_frame = annotator.annotate_frame(blank, mode_label="MOCK / SIMULATED")
+        self.assertGreater(np.count_nonzero(mock_frame), 0)
+
+        real_frame = annotator.annotate_frame(blank, mode_label="REAL: YOLOv8s ONNX")
+        self.assertGreater(np.count_nonzero(real_frame), 0)
+
+    def test_26_distinct_quantities_hud(self):
+        """26. Annotator draws distinct metrics for detections, tracks, session, and map counts."""
+        annotator = PerceptionAnnotator()
+        blank = np.zeros((240, 320, 3), dtype=np.uint8)
+        t1 = make_tracked_ore(track_id=1, state="CONFIRMED")
+        summary = make_count_summary(total=5)
+
+        annotated = annotator.annotate_frame(
+            blank,
+            tracked_ores=[t1],
+            counts_summary=summary,
+            mode_label="MOCK / SIMULATED",
+            raw_detections_count=3,
+            localized_count=1,
+            localization_status="UNCALIBRATED_CAMERA",
+        )
+        self.assertEqual(annotated.shape, (240, 320, 3))
+        self.assertGreater(np.count_nonzero(annotated), 0)
 
 
 class TestSyntheticVisualizationScenario(unittest.TestCase):

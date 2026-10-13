@@ -190,7 +190,10 @@ def generate_launch_description():
         executable="visualizer_node",
         name="visualizer_node",
         output="screen",
-        parameters=[config_file],
+        parameters=[
+            config_file,
+            {"detector_mode": detector_mode},
+        ],
     )
 
     # =========================================================================

@@ -1,0 +1,44 @@
+# CogProj APT / ROS 2 Jazzy Package Dependencies
+# Target Platform: Ubuntu 24.04.3 LTS (noble) ARM64 / aarch64
+
+# ROS 2 Core Communications & Interfaces
+ros-jazzy-rclpy
+ros-jazzy-std-msgs
+ros-jazzy-sensor-msgs
+ros-jazzy-geometry-msgs
+ros-jazzy-nav-msgs
+ros-jazzy-visualization-msgs
+
+# Vision & Image Processing
+ros-jazzy-cv-bridge
+python3-opencv
+python3-numpy
+
+# Kinematics & Coordinate Transforms
+ros-jazzy-tf2
+ros-jazzy-tf2-ros
+ros-jazzy-tf2-geometry-msgs
+
+# Mapping & SLAM
+ros-jazzy-slam-toolbox
+ros-jazzy-nav2-lifecycle-manager
+
+# Visualization & Remote Bridges
+ros-jazzy-foxglove-bridge
+ros-jazzy-rviz2
+ros-jazzy-rqt-image-view
+
+# Dashboard Web Gateway
+python3-tornado
+
+# Autonomous Navigation & Actions
+ros-jazzy-nav2-msgs
+ros-jazzy-action-msgs
+
+# Build & Dependency Tooling
+python3-colcon-common-extensions
+python3-rosdep
+python3-pytest
+python3-yaml
+
+

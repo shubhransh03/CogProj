@@ -120,7 +120,7 @@ class TestSystemSafetyAudit(unittest.TestCase):
                         f"SAFETY VIOLATION in launch file {lf}: contains forbidden actuation string '{forbidden}'",
                     )
                 # Pure perception launch files must not contain mapping
-                if basename != "integrated_slam_ore_pipeline.launch.py":
+                if basename not in ("integrated_slam_ore_pipeline.launch.py", "demo_showcase.launch.py"):
                     for forbidden in perception_only_forbidden:
                         self.assertNotIn(
                             forbidden,

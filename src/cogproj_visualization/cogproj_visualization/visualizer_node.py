@@ -17,7 +17,13 @@ from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy
 from sensor_msgs.msg import CompressedImage, Image
 
-from cogproj_interfaces.msg import DetectionArray, OreCountSummary, TrackedOre, TrackedOreArray
+from cogproj_interfaces.msg import (
+    DetectionArray,
+    OreCountSummary,
+    SpatialOreArray,
+    TrackedOre,
+    TrackedOreArray,
+)
 from .annotator import PerceptionAnnotator
 
 
@@ -32,6 +38,8 @@ class VisualizerNode(Node):
         self.declare_parameter("detection_topic", "/cogproj/detections")
         self.declare_parameter("tracking_topic", "/cogproj/tracked_ores")
         self.declare_parameter("count_topic", "/cogproj/counts_summary")
+        self.declare_parameter("spatial_topic", "/cogproj/spatial_ores")
+        self.declare_parameter("detector_mode", "mock")
         self.declare_parameter("annotated_topic", "/cogproj/image_annotated")
         self.declare_parameter("compressed_topic", "/cogproj/image_annotated/compressed")
         self.declare_parameter("camera_timeout_sec", 2.0)
@@ -45,6 +53,8 @@ class VisualizerNode(Node):
         self.detection_topic = self.get_parameter("detection_topic").get_parameter_value().string_value
         self.tracking_topic = self.get_parameter("tracking_topic").get_parameter_value().string_value
         self.count_topic = self.get_parameter("count_topic").get_parameter_value().string_value
+        self.spatial_topic = self.get_parameter("spatial_topic").get_parameter_value().string_value
+        self.detector_mode = self.get_parameter("detector_mode").get_parameter_value().string_value
         self.annotated_topic = self.get_parameter("annotated_topic").get_parameter_value().string_value
         self.compressed_topic = self.get_parameter("compressed_topic").get_parameter_value().string_value
         self.cam_timeout = self.get_parameter("camera_timeout_sec").get_parameter_value().double_value
@@ -59,12 +69,16 @@ class VisualizerNode(Node):
         # Cached latest perception messages
         self.latest_tracks: List[TrackedOre] = []
         self.latest_counts: Optional[OreCountSummary] = None
+        self.latest_raw_detections_count: Optional[int] = None
+        self.latest_localized_count: Optional[int] = None
+        self.latest_localization_status: str = ""
 
         # Message arrival tracking
         self.last_camera_time: float = 0.0
         self.last_detection_time: float = 0.0
         self.last_tracking_time: float = 0.0
         self.last_count_time: float = 0.0
+        self.last_spatial_time: float = 0.0
         self.frame_count: int = 0
 
         # Streaming QoS Profile (BEST_EFFORT, VOLATILE, depth 5)
@@ -92,9 +106,12 @@ class VisualizerNode(Node):
         self.det_sub = self.create_subscription(DetectionArray, self.detection_topic, self._det_callback, streaming_qos)
         self.trk_sub = self.create_subscription(TrackedOreArray, self.tracking_topic, self._trk_callback, streaming_qos)
         self.cnt_sub = self.create_subscription(OreCountSummary, self.count_topic, self._cnt_callback, summary_qos)
+        self.spatial_sub = self.create_subscription(SpatialOreArray, self.spatial_topic, self._spatial_callback, streaming_qos)
 
         self.get_logger().info("VisualizerNode initialized.")
         self.get_logger().info(f"  Input image topic:      {self.image_topic}")
+        self.get_logger().info(f"  Detector mode:          {self.detector_mode}")
+        self.get_logger().info(f"  Spatial topic:          {self.spatial_topic}")
         self.get_logger().info(f"  Annotated topic:        {self.annotated_topic}")
         self.get_logger().info(f"  Compressed topic:       {self.compressed_topic}")
         self.get_logger().info(f"  JPEG Quality:           {self.jpeg_quality}")
@@ -102,6 +119,7 @@ class VisualizerNode(Node):
     def _det_callback(self, msg: DetectionArray) -> None:
         """Record detection message arrival."""
         self.last_detection_time = time.monotonic()
+        self.latest_raw_detections_count = len(msg.detections)
 
     def _trk_callback(self, msg: TrackedOreArray) -> None:
         """Update cached active tracks."""
@@ -112,6 +130,15 @@ class VisualizerNode(Node):
         """Update cached cumulative count summary."""
         self.last_count_time = time.monotonic()
         self.latest_counts = msg
+
+    def _spatial_callback(self, msg: SpatialOreArray) -> None:
+        """Update cached spatial localization estimates."""
+        self.last_spatial_time = time.monotonic()
+        self.latest_localized_count = msg.localized_count
+        if msg.ores:
+            self.latest_localization_status = msg.ores[0].localization_status
+        elif msg.localized_count == 0:
+            self.latest_localization_status = "NO_OBJECTS"
 
     def get_status_dict(self) -> Dict[str, str]:
         """Compute current perception status strings based on timeouts."""
@@ -147,11 +174,16 @@ class VisualizerNode(Node):
 
         # Render annotations and HUD
         status = self.get_status_dict()
+        mode_label = "MOCK / SIMULATED" if self.detector_mode.lower() == "mock" else "REAL: YOLOv8s ONNX"
         annotated_bgr = self.annotator.annotate_frame(
             frame_bgr=cv_frame,
             tracked_ores=self.latest_tracks,
             counts_summary=self.latest_counts,
             status=status,
+            mode_label=mode_label,
+            raw_detections_count=self.latest_raw_detections_count,
+            localized_count=self.latest_localized_count,
+            localization_status=self.latest_localization_status,
         )
 
         h, w = annotated_bgr.shape[:2]

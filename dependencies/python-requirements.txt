@@ -1,0 +1,9 @@
+# CogProj Python Runtime & Test Dependencies
+# Note: In ROS 2 environments on Ubuntu 24.04 (PEP 668), prefer system apt packages.
+# These specifications define verified working versions for virtualenv compatibility.
+
+numpy>=1.26.0
+pyyaml>=6.0.1
+pytest>=7.4.4
+# opencv-python: system package python3-opencv (4.6.0+) provides cv2 with OpenCV DNN support
+

@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>CogProj Operator Console</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <!-- Top Navigation / Status Header -->
+  <header class="app-header">
+    <div class="header-left">
+      <div class="logo-badge">🪨 CogProj</div>
+      <h1>Operator Console</h1>
+      <span class="platform-tag">Beetlebot-117 | ROS 2 Jazzy (ID 155)</span>
+    </div>
+    <div class="header-right">
+      <div id="conn-status" class="status-pill offline">Connecting...</div>
+      <div id="active-mode-pill" class="status-pill mode-stopped">MODE: STOPPED</div>
+      <button id="btn-estop" class="btn btn-estop">🚨 EMERGENCY STOP</button>
+    </div>
+  </header>
+
+  <!-- Main Multi-Panel Grid -->
+  <main class="console-grid">
+
+    <!-- PANEL A: Camera & Perception Stream -->
+    <section class="panel panel-camera">
+      <div class="panel-header">
+        <h2>📷 Live Camera &amp; Ore Detection</h2>
+        <div class="panel-actions">
+          <span id="det-mode-badge" class="badge badge-real">REAL ONNX</span>
+          <span id="cam-fps" class="metric-pill">0.0 FPS</span>
+        </div>
+      </div>
+      <div class="camera-viewport">
+        <img id="camera-stream" src="" alt="Awaiting Camera Stream..." />
+        <div id="camera-overlay-banner" class="camera-banner hidden">FEED DISCONNECTED / STALE</div>
+        <div class="camera-hud-info">
+          <span>Model: <strong>Rover (2)/best.onnx</strong></span>
+          <span>Latency: <strong id="det-latency">0 ms</strong></span>
+        </div>
+      </div>
+    </section>
+
+    <!-- PANEL B: Interactive SLAM Map -->
+    <section class="panel panel-map">
+      <div class="panel-header">
+        <h2>🗺️ SLAM Occupancy Map &amp; Kinematics</h2>
+        <div class="panel-actions">
+          <span id="slam-status-badge" class="badge badge-warn">NO MAP</span>
+          <button id="btn-fit-map" class="btn btn-sm">Reset View</button>
+        </div>
+      </div>
+      <div class="map-viewport">
+        <canvas id="map-canvas"></canvas>
+        <div id="map-overlay-banner" class="map-banner hidden">Waiting for SLAM /map topic...</div>
+        <div class="map-legend">
+          <span><span class="dot robot-dot"></span> Robot (base_footprint)</span>
+          <span><span class="dot lidar-dot"></span> LaserScan (/scan)</span>
+          <span><span class="dot ore-dot"></span> Ore Marker (/cogproj/spatial_markers)</span>
+          <span><span class="dot goal-dot"></span> Nav Goal</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- PANEL C: Live Telemetry & Mission Counts -->
+    <section class="panel panel-telemetry">
+      <div class="panel-header">
+        <h2>📊 Live Telemetry &amp; Ore Counts</h2>
+      </div>
+      <div class="telemetry-body">
+
+        <!-- Ore Counts Summary Cards -->
+        <div class="count-cards">
+          <div class="card card-total">
+            <span class="card-val" id="count-total">0</span>
+            <span class="card-lbl">Unique Ores</span>
+          </div>
+          <div class="card card-resource">
+            <span class="card-val" id="count-resource">0</span>
+            <span class="card-lbl">Resource (Ore)</span>
+          </div>
+          <div class="card card-rock">
+            <span class="card-val" id="count-rock">0</span>
+            <span class="card-lbl">Host Rock</span>
+          </div>
+          <div class="card card-localized">
+            <span class="card-val" id="count-localized">0</span>
+            <span class="card-lbl">Localized in Map</span>
+          </div>
+        </div>
+
+        <!-- Sensor & Subsystem Health -->
+        <div class="subsystem-grid">
+          <div class="subsystem-item">
+            <span class="lbl">Camera:</span>
+            <span class="val" id="sensor-cam">OFFLINE</span>
+          </div>
+          <div class="subsystem-item">
+            <span class="lbl">RPLiDAR A1:</span>
+            <span class="val" id="sensor-lidar">OFFLINE (0.0 Hz)</span>
+          </div>
+          <div class="subsystem-item">
+            <span class="lbl">Calibration:</span>
+            <span class="val" id="sensor-calib">UNCALIBRATED</span>
+          </div>
+          <div class="subsystem-item">
+            <span class="lbl">Robot Arming:</span>
+            <span class="val" id="sensor-armed">DISARMED</span>
+          </div>
+          <div class="subsystem-item">
+            <span class="lbl">Pose (X, Y, θ):</span>
+            <span class="val" id="sensor-pose">(0.0, 0.0, 0°)</span>
+          </div>
+          <div class="subsystem-item">
+            <span class="lbl">Nav2 Status:</span>
+            <span class="val" id="sensor-nav">IDLE</span>
+          </div>
+        </div>
+
+        <!-- Active Tracks Table -->
+        <div class="tracks-container">
+          <h3>Active Tracks &amp; Detections</h3>
+          <table class="tracks-table">
+            <thead>
+              <tr>
+                <th>ID</th>
+                <th>Class</th>
+                <th>Confidence</th>
+                <th>State</th>
+                <th>Map Position</th>
+              </tr>
+            </thead>
+            <tbody id="tracks-table-body">
+              <tr>
+                <td colspan="5" class="empty-row">No active ore tracks detected</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+      </div>
+    </section>
+
+    <!-- PANEL D: Safe Motion & Mission Control -->
+    <section class="panel panel-control">
+      <div class="panel-header">
+        <h2>🎮 Vehicle Mode &amp; Motion Control</h2>
+      </div>
+      <div class="control-body">
+
+        <!-- Mode Selection Buttons -->
+        <div class="mode-selector">
+          <button id="btn-mode-stop" class="btn btn-mode active-mode">🛑 STOPPED</button>
+          <button id="btn-mode-manual" class="btn btn-mode">🎮 MANUAL / TELEOP</button>
+          <button id="btn-mode-auto" class="btn btn-mode">🧭 AUTONOMOUS</button>
+        </div>
+
+        <!-- Manual Teleoperation Controls -->
+        <div id="manual-controls" class="control-subpanel disabled">
+          <h3>Keyboard Teleoperation (Limits: 0.10 m/s, 0.25 rad/s)</h3>
+          <p class="teleop-hint">Hold key to move (deadman active). Release or switch tab to stop.</p>
+          <div class="keypad-layout">
+            <div class="key-row">
+              <button id="key-w" class="btn-key" data-key="w">W<br><small>Forward</small></button>
+            </div>
+            <div class="key-row">
+              <button id="key-a" class="btn-key" data-key="a">A<br><small>Left</small></button>
+              <button id="key-s" class="btn-key" data-key="s">S<br><small>Back</small></button>
+              <button id="key-d" class="btn-key" data-key="d">D<br><small>Right</small></button>
+            </div>
+            <div class="key-row">
+              <button id="key-space" class="btn-key key-wide" data-key=" ">SPACE (Stop)</button>
+            </div>
+          </div>
+          <div class="deadman-indicator">
+            <span>Deadman State: <strong id="deadman-state">IDLE (0.0 m/s)</strong></span>
+          </div>
+        </div>
+
+        <!-- Autonomous Navigation Controls -->
+        <div id="auto-controls" class="control-subpanel disabled">
+          <h3>Autonomous Waypoint Dispatch</h3>
+          <p class="teleop-hint">Click on map panel above to select target destination (X, Y, θ).</p>
+          <div class="goal-input-row">
+            <span>Goal: <strong id="selected-goal-lbl">None selected</strong></span>
+          </div>
+          <div class="goal-actions">
+            <button id="btn-send-goal" class="btn btn-primary" disabled>Dispatch Nav2 Goal</button>
+            <button id="btn-cancel-goal" class="btn btn-secondary" disabled>Cancel Navigation</button>
+          </div>
+          <div class="nav-state-banner">
+            <span>Navigation State: <strong id="nav-state-lbl">IDLE</strong></span>
+          </div>
+        </div>
+
+      </div>
+    </section>
+
+  </main>
+
+  <script src="app.js"></script>
+</body>
+</html>

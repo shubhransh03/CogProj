@@ -23,7 +23,11 @@ setup(
     license="Apache-2.0",
     tests_require=["pytest"],
     entry_points={
-        "console_scripts": [],
+        "console_scripts": [
+            "preflight_check = cogproj_bringup.preflight_check:main",
+            "demo_status = cogproj_bringup.demo_status:main",
+            "demo_map_node = cogproj_bringup.demo_map_node:main",
+        ],
     },
 )
 
