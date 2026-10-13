@@ -1,29 +1,26 @@
 /**
  * CogProj Operator Console - Frontend Application Logic
- * Phase 5M: Keyboard Teleoperation & Autonomous Navigation Supervisor Integration.
+ * Coordinates WebSockets telemetry, Canvas Map rendering, and Safe Teleop.
  */
 
 // Global State
 let ws = null;
-let sessionId = null;
 let currentMode = "STOPPED";
-let motionEnabled = false;
 let robotPose = { x: 0, y: 0, yaw: 0, valid: false };
 let latestMap = null;
 let scanPoints = [];
 let spatialOres = [];
 let selectedGoal = null;
-let navBlockers = [];
 const activeKeys = new Set();
+let teleopTimer = null;
 
-// Teleop Ceilings (Enforced on client and strictly clamped on server)
+// Teleop Speed Ceilings
 const MAX_LINEAR_VEL = 0.10;   // m/s
 const MAX_ANGULAR_VEL = 0.25;  // rad/s
 
 // DOM Elements
 const connStatus = document.getElementById("conn-status");
 const activeModePill = document.getElementById("active-mode-pill");
-const motionPill = document.getElementById("motion-pill");
 const btnEstop = document.getElementById("btn-estop");
 
 const cameraStream = document.getElementById("camera-stream");
@@ -54,19 +51,12 @@ const tracksTableBody = document.getElementById("tracks-table-body");
 const btnModeStop = document.getElementById("btn-mode-stop");
 const btnModeManual = document.getElementById("btn-mode-manual");
 const btnModeAuto = document.getElementById("btn-mode-auto");
-const btnToggleMotion = document.getElementById("btn-toggle-motion");
-const motionHintText = document.getElementById("motion-hint-text");
-
 const manualControls = document.getElementById("manual-controls");
 const autoControls = document.getElementById("auto-controls");
 const deadmanState = document.getElementById("deadman-state");
-const teleopVelReadout = document.getElementById("teleop-vel-readout");
-const watchdogPill = document.getElementById("watchdog-pill");
 
-const navBlockersBanner = document.getElementById("nav-blockers-banner");
 const selectedGoalLbl = document.getElementById("selected-goal-lbl");
 const btnSendGoal = document.getElementById("btn-send-goal");
-const btnClearGoal = document.getElementById("btn-clear-goal");
 const btnCancelGoal = document.getElementById("btn-cancel-goal");
 const navStateLbl = document.getElementById("nav-state-lbl");
 
@@ -75,9 +65,7 @@ let mapScale = 20; // pixels per meter
 let mapOffsetX = 0;
 let mapOffsetY = 0;
 
-// ============================================================================
-// WebSocket Connection & Session Management
-// ============================================================================
+// Initialize WebSocket
 function connectWebSocket() {
   const loc = window.location;
   const protocol = loc.protocol === "https:" ? "wss:" : "ws:";
@@ -116,10 +104,7 @@ function connectWebSocket() {
 }
 
 function handleSocketMessage(msg) {
-  if (msg.type === "init") {
-    sessionId = msg.session_id;
-    if (msg.state) updateTelemetry(msg.state);
-  } else if (msg.type === "telemetry" && msg.state) {
+  if (msg.type === "telemetry" && msg.state) {
     updateTelemetry(msg.state);
   } else if (msg.type === "image" && msg.data) {
     cameraStream.src = `data:image/jpeg;base64,${msg.data}`;
@@ -131,22 +116,14 @@ function handleSocketMessage(msg) {
     mapBanner.classList.add("hidden");
     drawMap();
   } else if (msg.type === "mode_response") {
-    updateModeUI(msg.mode, msg.motion_enabled);
-  } else if (msg.type === "motion_enable_response") {
-    updateMotionUI(msg.motion_enabled);
-  } else if (msg.type === "teleop_response" && !msg.success) {
-    console.warn("Teleop command rejected by server:", msg.message);
-    if (deadmanState) {
-      deadmanState.textContent = `REJECTED: ${msg.message}`;
-      deadmanState.style.color = "var(--danger)";
-    }
+    updateModeUI(msg.mode);
   }
 }
 
 function updateTelemetry(s) {
-  // Mode & Motion Enablement
-  if (s.mode !== currentMode || s.motion_enabled !== motionEnabled) {
-    updateModeUI(s.mode, s.motion_enabled);
+  // Mode & Motion
+  if (s.mode !== currentMode) {
+    updateModeUI(s.mode);
   }
 
   // Camera & Detection
@@ -189,56 +166,18 @@ function updateTelemetry(s) {
   if (s.scan_points) scanPoints = s.scan_points;
   if (s.spatial_ores) spatialOres = s.spatial_ores;
 
-  // Live Teleop Velocity & Watchdog Readouts
-  if (teleopVelReadout) {
-    const lin = s.linear_velocity !== undefined ? s.linear_velocity.toFixed(2) : "0.00";
-    const ang = s.angular_velocity !== undefined ? s.angular_velocity.toFixed(2) : "0.00";
-    teleopVelReadout.textContent = `lin: ${lin} m/s | ang: ${ang} rad/s`;
-  }
-  if (watchdogPill) {
-    if (s.watchdog_healthy) {
-      watchdogPill.textContent = "WATCHDOG: HEALTHY";
-      watchdogPill.className = "badge badge-real";
-    } else {
-      watchdogPill.textContent = `WATCHDOG: TIMEOUT (${Math.round(s.watchdog_age_ms)}ms)`;
-      watchdogPill.className = "badge badge-warn";
-    }
-  }
-
-  // Nav2 State & Precondition Blockers
+  // Nav2 State
   if (s.nav_state) {
     sensorNav.textContent = s.nav_state;
     navStateLbl.textContent = s.nav_state;
-    btnCancelGoal.disabled = !(s.nav_state === "NAVIGATING" || s.nav_state === "GOAL_PENDING" || s.nav_state === "GOAL_ACCEPTED");
+    btnCancelGoal.disabled = (s.nav_state === "IDLE" || s.nav_state === "GOAL_REACHED" || s.nav_state === "GOAL_CANCELED");
   }
-
-  navBlockers = s.nav_blockers || [];
-  renderNavBlockers();
 
   // Active Tracks Table
   renderTracksTable(s.tracks || []);
 
   // Redraw Canvas
   drawMap();
-}
-
-function renderNavBlockers() {
-  if (!navBlockersBanner) return;
-
-  if (currentMode !== "AUTONOMOUS") {
-    navBlockersBanner.classList.add("hidden");
-    return;
-  }
-
-  if (navBlockers.length > 0) {
-    navBlockersBanner.classList.remove("hidden");
-    let items = navBlockers.map(b => `<li>${b}</li>`).join("");
-    navBlockersBanner.innerHTML = `<strong>⚠️ Navigation Prerequisite Blockers (${navBlockers.length}):</strong><ul>${items}</ul>`;
-    btnSendGoal.disabled = true;
-  } else {
-    navBlockersBanner.classList.add("hidden");
-    btnSendGoal.disabled = (selectedGoal === null || !motionEnabled);
-  }
 }
 
 function renderTracksTable(tracks) {
@@ -260,13 +199,8 @@ function renderTracksTable(tracks) {
   tracksTableBody.innerHTML = html;
 }
 
-// ============================================================================
-// Mode & Motion Enablement UI Transitions
-// ============================================================================
-function updateModeUI(mode, motionArmed) {
+function updateModeUI(mode) {
   currentMode = mode;
-  motionEnabled = !!motionArmed;
-
   activeModePill.textContent = `MODE: ${mode}`;
   activeModePill.className = `status-pill mode-${mode.toLowerCase()}`;
 
@@ -277,74 +211,12 @@ function updateModeUI(mode, motionArmed) {
   manualControls.classList.toggle("disabled", mode !== "MANUAL");
   autoControls.classList.toggle("disabled", mode !== "AUTONOMOUS");
 
-  updateMotionUI(motionEnabled);
-
   if (mode !== "MANUAL") {
     stopTeleop();
   }
 }
 
-function updateMotionUI(enabled) {
-  motionEnabled = enabled;
-
-  motionPill.textContent = enabled ? "MOTORS: ARMED" : "MOTORS: DISARMED";
-  motionPill.className = `status-pill ${enabled ? "motion-enabled" : "motion-disabled"}`;
-
-  if (currentMode === "STOPPED") {
-    btnToggleMotion.disabled = true;
-    btnToggleMotion.className = "btn btn-motion-disabled";
-    btnToggleMotion.textContent = "⚡ Enable Motion / Motors";
-    motionHintText.textContent = "Vehicle stopped. Select MANUAL or AUTONOMOUS before enabling motion.";
-  } else {
-    btnToggleMotion.disabled = false;
-    if (enabled) {
-      btnToggleMotion.className = "btn btn-motion-enabled";
-      btnToggleMotion.textContent = "⚡ Motion ENABLED (Click to Disarm)";
-      motionHintText.textContent = `Motors actively armed for ${currentMode} mode. Operator commands will drive the robot.`;
-    } else {
-      btnToggleMotion.className = "btn btn-motion-disabled";
-      btnToggleMotion.textContent = "⚡ Enable Motion / Motors";
-      motionHintText.textContent = `Motion inhibited for safety. Explicitly click here to arm motors and begin driving.`;
-    }
-  }
-
-  renderNavBlockers();
-}
-
-// Motion Toggle Button
-btnToggleMotion.addEventListener("click", () => {
-  if (currentMode === "STOPPED") return;
-  const targetState = !motionEnabled;
-  if (ws && ws.readyState === WebSocket.OPEN) {
-    ws.send(JSON.stringify({
-      type: "enable_motion",
-      enabled: targetState,
-      session_id: sessionId
-    }));
-  }
-});
-
-// Mode Selector Buttons
-btnModeStop.addEventListener("click", () => setMode("STOPPED"));
-btnModeManual.addEventListener("click", () => setMode("MANUAL"));
-btnModeAuto.addEventListener("click", () => setMode("AUTONOMOUS"));
-
-btnEstop.addEventListener("click", () => {
-  if (ws && ws.readyState === WebSocket.OPEN) {
-    ws.send(JSON.stringify({ type: "estop", session_id: sessionId }));
-  }
-  updateModeUI("STOPPED", false);
-});
-
-function setMode(mode) {
-  if (ws && ws.readyState === WebSocket.OPEN) {
-    ws.send(JSON.stringify({ type: "set_mode", mode, session_id: sessionId }));
-  }
-}
-
-// ============================================================================
-// Map Canvas Drawing & Goal Selection
-// ============================================================================
+// Map Canvas Drawing
 function resizeCanvas() {
   const rect = mapCanvas.getBoundingClientRect();
   mapCanvas.width = rect.width;
@@ -357,7 +229,7 @@ function resizeCanvas() {
 function drawMap() {
   mapCtx.clearRect(0, 0, mapCanvas.width, mapCanvas.height);
 
-  // 1. Grid Background
+  // 1. Draw Grid background
   mapCtx.strokeStyle = "#1e293b";
   mapCtx.lineWidth = 1;
   const gridSize = 1.0 * mapScale; // 1 meter grid
@@ -374,7 +246,7 @@ function drawMap() {
     mapCtx.stroke();
   }
 
-  // 2. Occupancy Grid
+  // 2. Draw Occupancy Grid (if present)
   if (latestMap) {
     const res = latestMap.resolution;
     const w = latestMap.width;
@@ -386,27 +258,28 @@ function drawMap() {
     for (let gy = 0; gy < h; gy++) {
       for (let gx = 0; gx < w; gx++) {
         const val = cells[gy * w + gx];
-        if (val === -1) continue; // unknown space
+        if (val === -1) continue; // unknown
 
         const wx = ox + gx * res;
         const wy = oy + gy * res;
         const cx = mapOffsetX + wx * mapScale;
-        const cy = mapOffsetY - wy * mapScale;
+        const cy = mapOffsetY - wy * mapScale; // invert Y for screen coords
 
         if (val > 50) {
-          mapCtx.fillStyle = "#0f172a"; // occupied obstacle (black)
+          mapCtx.fillStyle = "#0f172a"; // occupied (black)
         } else {
-          mapCtx.fillStyle = "#f8fafc"; // free navigable space (white)
+          mapCtx.fillStyle = "#f8fafc"; // free (white)
         }
         mapCtx.fillRect(cx, cy, res * mapScale + 1, res * mapScale + 1);
       }
     }
   }
 
-  // 3. LaserScan Points (Red dots)
+  // 3. Draw LaserScan Points (Red dots)
   if (scanPoints.length > 0) {
     mapCtx.fillStyle = "#ef4444";
     for (const pt of scanPoints) {
+      // transform scan point relative to robot pose
       const cosA = Math.cos(robotPose.yaw);
       const sinA = Math.sin(robotPose.yaw);
       const wx = robotPose.x + (pt[0] * cosA - pt[1] * sinA);
@@ -421,7 +294,7 @@ function drawMap() {
     }
   }
 
-  // 4. Spatial Ore Markers (Amber dots)
+  // 4. Draw Spatial Ore Markers (Amber dots)
   if (spatialOres.length > 0) {
     for (const ore of spatialOres) {
       const cx = mapOffsetX + ore.x * mapScale;
@@ -439,7 +312,7 @@ function drawMap() {
     }
   }
 
-  // 5. Robot Pose (Blue circle with heading arrow)
+  // 5. Draw Robot (Blue circle with heading indicator)
   const rcx = mapOffsetX + robotPose.x * mapScale;
   const rcy = mapOffsetY - robotPose.y * mapScale;
 
@@ -451,6 +324,7 @@ function drawMap() {
   mapCtx.lineWidth = 2;
   mapCtx.stroke();
 
+  // Heading arrow
   const arrowLen = 16;
   const hx = rcx + arrowLen * Math.cos(robotPose.yaw);
   const hy = rcy - arrowLen * Math.sin(robotPose.yaw);
@@ -460,7 +334,7 @@ function drawMap() {
   mapCtx.lineTo(hx, hy);
   mapCtx.stroke();
 
-  // 6. Navigation Target Goal (Green marker)
+  // 6. Draw Navigation Target Goal (if selected)
   if (selectedGoal) {
     const gcx = mapOffsetX + selectedGoal.x * mapScale;
     const gcy = mapOffsetY - selectedGoal.y * mapScale;
@@ -471,11 +345,11 @@ function drawMap() {
     mapCtx.fill();
     mapCtx.strokeStyle = "#fff";
     mapCtx.stroke();
-    mapCtx.fillText("🎯 Target", gcx + 8, gcy + 3);
+    mapCtx.fillText("🎯 Goal", gcx + 8, gcy + 3);
   }
 }
 
-// Map Click -> Select Navigation Target
+// Map Click -> Select Navigation Goal
 mapCanvas.addEventListener("click", (e) => {
   if (currentMode !== "AUTONOMOUS") return;
 
@@ -488,16 +362,7 @@ mapCanvas.addEventListener("click", (e) => {
 
   selectedGoal = { x: parseFloat(wx.toFixed(2)), y: parseFloat(wy.toFixed(2)), yaw: 0.0 };
   selectedGoalLbl.textContent = `X: ${selectedGoal.x} m, Y: ${selectedGoal.y} m, θ: 0°`;
-  btnClearGoal.disabled = false;
-  renderNavBlockers();
-  drawMap();
-});
-
-btnClearGoal.addEventListener("click", () => {
-  selectedGoal = null;
-  selectedGoalLbl.textContent = "None selected (Click map to place)";
-  btnSendGoal.disabled = true;
-  btnClearGoal.disabled = true;
+  btnSendGoal.disabled = false;
   drawMap();
 });
 
@@ -507,65 +372,53 @@ btnFitMap.addEventListener("click", () => {
   drawMap();
 });
 
+// Mode Buttons
+btnModeStop.addEventListener("click", () => setMode("STOPPED"));
+btnModeManual.addEventListener("click", () => setMode("MANUAL"));
+btnModeAuto.addEventListener("click", () => setMode("AUTONOMOUS"));
+btnEstop.addEventListener("click", () => {
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify({ type: "estop" }));
+  }
+  updateModeUI("STOPPED");
+});
+
+function setMode(mode) {
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify({ type: "set_mode", mode }));
+  }
+}
+
+// Autonomous Goal Actions
 btnSendGoal.addEventListener("click", () => {
-  if (!selectedGoal || currentMode !== "AUTONOMOUS" || !motionEnabled) return;
+  if (!selectedGoal || currentMode !== "AUTONOMOUS") return;
   if (ws && ws.readyState === WebSocket.OPEN) {
     ws.send(JSON.stringify({
       type: "nav_goal",
       x: selectedGoal.x,
       y: selectedGoal.y,
-      yaw: selectedGoal.yaw,
-      session_id: sessionId
+      yaw: selectedGoal.yaw
     }));
   }
 });
 
 btnCancelGoal.addEventListener("click", () => {
   if (ws && ws.readyState === WebSocket.OPEN) {
-    ws.send(JSON.stringify({ type: "cancel_nav", session_id: sessionId }));
+    ws.send(JSON.stringify({ type: "cancel_nav" }));
   }
 });
 
-// ============================================================================
-// Robust Keyboard Teleoperation (W/A/S/D & Arrows + Opposing Key Cancellation)
-// ============================================================================
-const VALID_KEYS = ["w", "a", "s", "d", "arrowup", "arrowdown", "arrowleft", "arrowright", " "];
-let teleopHeartbeatTimer = null;
-
-function startTeleopHeartbeat() {
-  if (!teleopHeartbeatTimer) {
-    teleopHeartbeatTimer = setInterval(() => {
-      if (currentMode === "MANUAL" && activeKeys.size > 0 && !activeKeys.has(" ")) {
-        sendTeleopFromKeys();
-      } else {
-        stopTeleop();
-      }
-    }, 100); // 10 Hz continuous stream to refresh 0.3s ROS watchdog
-  }
-}
-
-function stopTeleopHeartbeat() {
-  if (teleopHeartbeatTimer) {
-    clearInterval(teleopHeartbeatTimer);
-    teleopHeartbeatTimer = null;
-  }
-}
-
+// Teleoperation Keyboard Controls
 window.addEventListener("keydown", (e) => {
   if (currentMode !== "MANUAL") return;
   const key = e.key.toLowerCase();
 
-  if (VALID_KEYS.includes(key)) {
+  if (["w", "a", "s", "d", " "].includes(key)) {
     e.preventDefault();
-    if (key === " ") {
-      stopTeleop();
-      return;
-    }
     if (!activeKeys.has(key)) {
       activeKeys.add(key);
       highlightKey(key, true);
       sendTeleopFromKeys();
-      startTeleopHeartbeat();
     }
   }
 });
@@ -574,10 +427,10 @@ window.addEventListener("keyup", (e) => {
   if (currentMode !== "MANUAL") return;
   const key = e.key.toLowerCase();
 
-  if (VALID_KEYS.includes(key)) {
+  if (["w", "a", "s", "d", " "].includes(key)) {
     activeKeys.delete(key);
     highlightKey(key, false);
-    if (activeKeys.size === 0 || activeKeys.has(" ")) {
+    if (activeKeys.size === 0) {
       stopTeleop();
     } else {
       sendTeleopFromKeys();
@@ -585,7 +438,7 @@ window.addEventListener("keyup", (e) => {
   }
 });
 
-// Safety: blur or tab hide immediately stops vehicle motion
+// Automatic Safety Stop on Focus Loss or Tab Hide
 window.addEventListener("blur", () => {
   if (currentMode === "MANUAL") stopTeleop();
 });
@@ -596,25 +449,18 @@ document.addEventListener("visibilitychange", () => {
 function sendTeleopFromKeys() {
   if (currentMode !== "MANUAL") return;
 
-  // Spacebar cancels all active motion
   if (activeKeys.has(" ")) {
     stopTeleop();
     return;
   }
 
-  // Directional evaluation with opposing key cancellation
-  const forward = activeKeys.has("w") || activeKeys.has("arrowup");
-  const back = activeKeys.has("s") || activeKeys.has("arrowdown");
-  const left = activeKeys.has("a") || activeKeys.has("arrowleft");
-  const right = activeKeys.has("d") || activeKeys.has("arrowright");
-
   let lin = 0.0;
-  if (forward && !back) lin = MAX_LINEAR_VEL;
-  else if (back && !forward) lin = -MAX_LINEAR_VEL;
-
   let ang = 0.0;
-  if (left && !right) ang = MAX_ANGULAR_VEL;
-  else if (right && !left) ang = -MAX_ANGULAR_VEL;
+
+  if (activeKeys.has("w")) lin += MAX_LINEAR_VEL;
+  if (activeKeys.has("s")) lin -= MAX_LINEAR_VEL;
+  if (activeKeys.has("a")) ang += MAX_ANGULAR_VEL;
+  if (activeKeys.has("d")) ang -= MAX_ANGULAR_VEL;
 
   const deadman = (lin !== 0.0 || ang !== 0.0);
 
@@ -623,19 +469,15 @@ function sendTeleopFromKeys() {
       type: "teleop",
       linear: lin,
       angular: ang,
-      deadman: deadman,
-      session_id: sessionId
+      deadman: deadman
     }));
   }
 
-  deadmanState.textContent = deadman
-    ? `ACTIVE (Lin: ${lin.toFixed(2)} m/s, Ang: ${ang.toFixed(2)} rad/s)`
-    : "IDLE (0.0 m/s)";
+  deadmanState.textContent = deadman ? `ACTIVE (Lin: ${lin.toFixed(2)} m/s, Ang: ${ang.toFixed(2)} rad/s)` : "IDLE (0.0 m/s)";
   deadmanState.style.color = deadman ? "var(--success)" : "var(--text-muted)";
 }
 
 function stopTeleop() {
-  stopTeleopHeartbeat();
   activeKeys.clear();
   document.querySelectorAll(".btn-key").forEach(b => b.classList.remove("active-key"));
 
@@ -644,8 +486,7 @@ function stopTeleop() {
       type: "teleop",
       linear: 0.0,
       angular: 0.0,
-      deadman: false,
-      session_id: sessionId
+      deadman: false
     }));
   }
 
@@ -654,13 +495,7 @@ function stopTeleop() {
 }
 
 function highlightKey(key, active) {
-  let mappedKey = key;
-  if (key === "arrowup") mappedKey = "w";
-  else if (key === "arrowleft") mappedKey = "a";
-  else if (key === "arrowdown") mappedKey = "s";
-  else if (key === "arrowright") mappedKey = "d";
-
-  const btn = document.querySelector(`.btn-key[data-key="${mappedKey}"]`);
+  const btn = document.querySelector(`.btn-key[data-key="${key}"]`);
   if (btn) {
     btn.classList.toggle("active-key", active);
   }
@@ -671,36 +506,16 @@ document.querySelectorAll(".btn-key").forEach(btn => {
   const key = btn.getAttribute("data-key");
   btn.addEventListener("mousedown", () => {
     if (currentMode === "MANUAL") {
-      if (key === " ") {
-        stopTeleop();
-        return;
-      }
       activeKeys.add(key);
       highlightKey(key, true);
       sendTeleopFromKeys();
-      startTeleopHeartbeat();
     }
   });
   btn.addEventListener("mouseup", () => {
     if (currentMode === "MANUAL") {
       activeKeys.delete(key);
       highlightKey(key, false);
-      if (activeKeys.size === 0) {
-        stopTeleop();
-      } else {
-        sendTeleopFromKeys();
-      }
-    }
-  });
-  btn.addEventListener("mouseleave", () => {
-    if (currentMode === "MANUAL" && activeKeys.has(key)) {
-      activeKeys.delete(key);
-      highlightKey(key, false);
-      if (activeKeys.size === 0) {
-        stopTeleop();
-      } else {
-        sendTeleopFromKeys();
-      }
+      if (activeKeys.size === 0) stopTeleop();
     }
   });
 });

@@ -324,22 +324,6 @@ else
     fi
 fi
 
-# 5f. Motor Controller Bridge (STM32 on /dev/ttyAMA0)
-if ! pgrep -f "lyra_node" >/dev/null 2>&1; then
-    LYRA_PARAMS="/home/veerobot/lyra_ws/src/lyra_bridge/config/lyra_params.yaml"
-    if [[ -f "$LYRA_PARAMS" && -e /dev/ttyAMA0 ]]; then
-        echo -e "  • Motor Bridge   : ${BLUE}[STARTING]${NC} Launching lyra_bridge on /dev/ttyAMA0..."
-        ros2 run lyra_bridge lyra_node --ros-args --params-file "$LYRA_PARAMS" > "$LOG_DIR/lyra_bridge.log" 2>&1 &
-        BRIDGE_PID=$!
-        track_pid "$BRIDGE_PID"
-        echo -e "    ${GREEN}[✓] lyra_bridge active (PID $BRIDGE_PID)${NC}"
-    else
-        echo -e "  • Motor Bridge   : ${YELLOW}[STANDBY]${NC} Params or /dev/ttyAMA0 missing"
-    fi
-else
-    echo -e "  • Motor Bridge   : ${GREEN}[REUSING]${NC} lyra_bridge already active"
-fi
-
 # 6. CogProj Perception Pipeline
 echo -e "\n${CYAN}${BOLD}[6/7] Starting CogProj Perception Pipeline...${NC}"
 DETECTOR_ARG="real"

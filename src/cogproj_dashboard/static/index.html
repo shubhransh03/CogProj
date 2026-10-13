@@ -17,7 +17,6 @@
     <div class="header-right">
       <div id="conn-status" class="status-pill offline">Connecting...</div>
       <div id="active-mode-pill" class="status-pill mode-stopped">MODE: STOPPED</div>
-      <div id="motion-pill" class="status-pill motion-disabled">MOTORS: DISARMED</div>
       <button id="btn-estop" class="btn btn-estop">🚨 EMERGENCY STOP</button>
     </div>
   </header>
@@ -116,7 +115,7 @@
           </div>
           <div class="subsystem-item">
             <span class="lbl">Nav2 Status:</span>
-            <span class="val" id="sensor-nav">STOPPED</span>
+            <span class="val" id="sensor-nav">IDLE</span>
           </div>
         </div>
 
@@ -158,58 +157,41 @@
           <button id="btn-mode-auto" class="btn btn-mode">🧭 AUTONOMOUS</button>
         </div>
 
-        <!-- Explicit Operator Motion Enablement Control -->
-        <div class="motion-enable-bar">
-          <button id="btn-toggle-motion" class="btn btn-motion-disabled" disabled>
-            ⚡ Enable Motion / Motors
-          </button>
-          <div class="motion-hint" id="motion-hint-text">
-            Motors disarmed. Select MANUAL or AUTONOMOUS then explicitly enable motion.
-          </div>
-        </div>
-
         <!-- Manual Teleoperation Controls -->
         <div id="manual-controls" class="control-subpanel disabled">
-          <h3>Keyboard Teleoperation (W/A/S/D or Arrow Keys | Ceiling: 0.10 m/s, 0.25 rad/s)</h3>
-          <p class="teleop-hint">Hold key to move (deadman active). Release or lose focus to stop immediately.</p>
+          <h3>Keyboard Teleoperation (Limits: 0.10 m/s, 0.25 rad/s)</h3>
+          <p class="teleop-hint">Hold key to move (deadman active). Release or switch tab to stop.</p>
           <div class="keypad-layout">
             <div class="key-row">
-              <button id="key-w" class="btn-key" data-key="w">W / ↑<br><small>Forward</small></button>
+              <button id="key-w" class="btn-key" data-key="w">W<br><small>Forward</small></button>
             </div>
             <div class="key-row">
-              <button id="key-a" class="btn-key" data-key="a">A / ←<br><small>Left</small></button>
-              <button id="key-s" class="btn-key" data-key="s">S / ↓<br><small>Back</small></button>
-              <button id="key-d" class="btn-key" data-key="d">D / →<br><small>Right</small></button>
+              <button id="key-a" class="btn-key" data-key="a">A<br><small>Left</small></button>
+              <button id="key-s" class="btn-key" data-key="s">S<br><small>Back</small></button>
+              <button id="key-d" class="btn-key" data-key="d">D<br><small>Right</small></button>
             </div>
             <div class="key-row">
-              <button id="key-space" class="btn-key key-wide" data-key=" ">SPACEBAR (Immediate Stop)</button>
+              <button id="key-space" class="btn-key key-wide" data-key=" ">SPACE (Stop)</button>
             </div>
           </div>
-          <div class="teleop-telemetry-row">
-            <span>Deadman: <strong id="deadman-state">IDLE (0.0 m/s)</strong></span>
-            <span>Velocities: <strong id="teleop-vel-readout">lin: 0.00 m/s | ang: 0.00 rad/s</strong></span>
-            <span id="watchdog-pill" class="badge badge-real">WATCHDOG: HEALTHY</span>
+          <div class="deadman-indicator">
+            <span>Deadman State: <strong id="deadman-state">IDLE (0.0 m/s)</strong></span>
           </div>
         </div>
 
         <!-- Autonomous Navigation Controls -->
         <div id="auto-controls" class="control-subpanel disabled">
-          <h3>Autonomous Waypoint Dispatch (Nav2 Action Client)</h3>
+          <h3>Autonomous Waypoint Dispatch</h3>
           <p class="teleop-hint">Click on map panel above to select target destination (X, Y, θ).</p>
-          
-          <!-- Nav2 Prerequisites Checklist & Blocker Warning -->
-          <div id="nav-blockers-banner" class="nav-warning-banner hidden"></div>
-
           <div class="goal-input-row">
-            <span>Target Waypoint: <strong id="selected-goal-lbl">None selected (Click map to place)</strong></span>
+            <span>Goal: <strong id="selected-goal-lbl">None selected</strong></span>
           </div>
           <div class="goal-actions">
-            <button id="btn-send-goal" class="btn btn-primary" disabled>Confirm &amp; Dispatch Goal</button>
-            <button id="btn-clear-goal" class="btn btn-secondary" disabled>Clear Target</button>
+            <button id="btn-send-goal" class="btn btn-primary" disabled>Dispatch Nav2 Goal</button>
             <button id="btn-cancel-goal" class="btn btn-secondary" disabled>Cancel Navigation</button>
           </div>
           <div class="nav-state-banner">
-            <span>Navigation Lifecycle State: <strong id="nav-state-lbl">STOPPED</strong></span>
+            <span>Navigation State: <strong id="nav-state-lbl">IDLE</strong></span>
           </div>
         </div>
 

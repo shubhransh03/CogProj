@@ -1,9 +1,10 @@
+"""Tornado-based HTTP and WebSocket server for CogProj Operator Console."""
+
 import asyncio
 import json
 import logging
 import os
 import threading
-import uuid
 from typing import Any, Dict, List, Optional, Set
 
 import tornado.web
@@ -18,32 +19,23 @@ class DashboardWebSocketHandler(tornado.websocket.WebSocketHandler):
     clients: Set["DashboardWebSocketHandler"] = set()
     node_ref: Any = None
 
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.session_id: str = str(uuid.uuid4())[:8]
-
     def check_origin(self, origin: str) -> bool:
         """Allow connections from localhost and forwarded SSH ports."""
         return True
 
     def open(self) -> None:
         DashboardWebSocketHandler.clients.add(self)
-        logger.info(f"Dashboard client connected: {self.request.remote_ip} [Session: {self.session_id}] (Total: {len(self.clients)})")
+        logger.info(f"Dashboard client connected: {self.request.remote_ip} (Total: {len(self.clients)})")
         if self.node_ref:
-            # Send initial init packet with session ID and full state
-            self.send_json({
-                "type": "init",
-                "session_id": self.session_id,
-                "state": self.node_ref.get_full_state()
-            })
+            # Send initial full state immediately
+            self.send_json(self.node_ref.get_full_state())
 
     def on_close(self) -> None:
         DashboardWebSocketHandler.clients.discard(self)
-        logger.info(f"Dashboard client disconnected: [Session: {self.session_id}]. (Remaining: {len(self.clients)})")
-        if self.node_ref:
-            # Release session and trigger emergency stop if this was the active controller
-            self.node_ref.supervisor.handle_disconnect(self.session_id)
-            self.node_ref.supervisor.release_session(self.session_id)
+        logger.info(f"Dashboard client disconnected. (Remaining: {len(self.clients)})")
+        if len(self.clients) == 0 and self.node_ref:
+            # Safety: no clients connected -> stop vehicle motion
+            self.node_ref.supervisor.handle_disconnect()
 
     def on_message(self, message: str) -> None:
         if not self.node_ref:
@@ -52,70 +44,30 @@ class DashboardWebSocketHandler(tornado.websocket.WebSocketHandler):
         try:
             data = json.loads(message)
             msg_type = data.get("type", "")
-            session_id = data.get("session_id", self.session_id)
 
             if msg_type == "set_mode":
                 mode = data.get("mode", "STOPPED")
-                success, msg = self.node_ref.supervisor.set_mode(mode, session_id=session_id)
-                self.send_json({
-                    "type": "mode_response",
-                    "success": success,
-                    "message": msg,
-                    "mode": self.node_ref.supervisor.mode.value,
-                    "motion_enabled": self.node_ref.supervisor.motion_enabled,
-                })
-                # Broadcast updated state
-                DashboardWebSocketHandler.broadcast_json({"type": "telemetry", "state": self.node_ref.get_full_state()})
-
-            elif msg_type == "enable_motion":
-                enabled = bool(data.get("enabled", False))
-                success, msg = self.node_ref.supervisor.enable_motion(enabled, session_id=session_id)
-                self.send_json({
-                    "type": "motion_enable_response",
-                    "success": success,
-                    "message": msg,
-                    "motion_enabled": self.node_ref.supervisor.motion_enabled,
-                })
-                DashboardWebSocketHandler.broadcast_json({"type": "telemetry", "state": self.node_ref.get_full_state()})
+                success, msg = self.node_ref.supervisor.set_mode(mode)
+                self.send_json({"type": "mode_response", "success": success, "message": msg, "mode": self.node_ref.supervisor.mode.value})
 
             elif msg_type == "teleop":
                 linear = float(data.get("linear", 0.0))
                 angular = float(data.get("angular", 0.0))
                 deadman = bool(data.get("deadman", False))
-                success, msg = self.node_ref.supervisor.receive_teleop_command(
-                    linear, angular, deadman, session_id=session_id
-                )
-                if not success:
-                    logger.warning(f"Teleop rejected: {msg}")
-                    self.send_json({
-                        "type": "teleop_response",
-                        "success": False,
-                        "message": msg,
-                    })
+                success, msg = self.node_ref.supervisor.receive_teleop_command(linear, angular, deadman)
 
             elif msg_type == "nav_goal":
                 x = float(data.get("x", 0.0))
                 y = float(data.get("y", 0.0))
                 yaw = float(data.get("yaw", 0.0))
-                success, msg = self.node_ref.dispatch_nav_goal(x, y, yaw, session_id=session_id)
-                self.send_json({"type": "nav_response", "success": success, "message": msg})
-                DashboardWebSocketHandler.broadcast_json({"type": "telemetry", "state": self.node_ref.get_full_state()})
+                self.node_ref.dispatch_nav_goal(x, y, yaw)
 
             elif msg_type == "cancel_nav":
                 self.node_ref.cancel_nav_goal()
-                self.send_json({"type": "nav_response", "success": True, "message": "Navigation canceled"})
-                DashboardWebSocketHandler.broadcast_json({"type": "telemetry", "state": self.node_ref.get_full_state()})
 
             elif msg_type == "estop":
                 self.node_ref.supervisor.emergency_stop()
-                self.send_json({
-                    "type": "mode_response",
-                    "success": True,
-                    "message": "Emergency Stop Engaged",
-                    "mode": "STOPPED",
-                    "motion_enabled": False,
-                })
-                DashboardWebSocketHandler.broadcast_json({"type": "telemetry", "state": self.node_ref.get_full_state()})
+                self.send_json({"type": "mode_response", "success": True, "message": "Emergency Stop Engaged", "mode": "STOPPED"})
 
         except Exception as e:
             logger.error(f"Error handling WebSocket message: {e}", exc_info=True)
