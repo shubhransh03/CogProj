@@ -86,6 +86,18 @@ else
     echo -e "  • Serial Port    : ${YELLOW}[!] /dev/ttyUSB0 not present${NC}"
 fi
 
+# Motor Controller Serial (/dev/ttyAMA0)
+if [[ -e /dev/ttyAMA0 ]]; then
+    PERMS=$(ls -l /dev/ttyAMA0 | awk '{print $1 " " $3 ":" $4}')
+    if [[ -r /dev/ttyAMA0 && -w /dev/ttyAMA0 ]]; then
+        echo -e "  • STM32 Motor Port: ${GREEN}[✓] /dev/ttyAMA0 accessible (read/write)${NC} ($PERMS)"
+    else
+        echo -e "  • STM32 Motor Port: ${RED}[✗] /dev/ttyAMA0 lacks RW permission${NC} ($PERMS)"
+    fi
+else
+    echo -e "  • STM32 Motor Port: ${YELLOW}[!] /dev/ttyAMA0 not present${NC}"
+fi
+
 # User Groups
 USER_GROUPS=$(groups "$USER")
 if echo "$USER_GROUPS" | grep -qw "dialout" && echo "$USER_GROUPS" | grep -qw "video"; then
@@ -153,6 +165,8 @@ audit_topic "/imu/data_raw" "Raw IMU Data"
 audit_topic "/tf" "Dynamic TF Stream"
 audit_topic "/tf_static" "Static TF Stream"
 audit_topic "/map" "Occupancy Grid Map"
+audit_topic "/lyra/armed" "Lyra Armed Status"
+audit_topic "/wheel_rpm" "Lyra Wheel RPM"
 
 # CogProj perception topics
 echo "  - CogProj Pipeline Topics:"

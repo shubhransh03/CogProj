@@ -8,7 +8,7 @@ supervised by ControlSupervisor.
 import base64
 import math
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import rclpy
 from rclpy.action import ActionClient
@@ -16,7 +16,7 @@ from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy
 from geometry_msgs.msg import PoseStamped, Twist
 from nav_msgs.msg import OccupancyGrid
-from sensor_msgs.msg import CameraInfo, CompressedImage, LaserScan
+from sensor_msgs.msg import CameraInfo, CompressedImage, LaserScan, Joy
 from std_msgs.msg import Bool
 from std_srvs.srv import Trigger
 import tf2_ros
@@ -29,7 +29,7 @@ from cogproj_interfaces.msg import (
     TrackedOreArray,
 )
 
-from .supervisor import ControlMode, ControlSupervisor
+from .supervisor import ControlMode, ControlSupervisor, NavState
 from .web_server import DashboardWebSocketHandler, WebServerThread
 
 
@@ -64,6 +64,7 @@ class DashboardGatewayNode(Node):
             on_velocity_output=self._publish_velocity,
             on_mode_changed=self._handle_mode_changed,
             on_stop_requested=self._handle_stop_requested,
+            on_motion_enable_changed=self._handle_motion_enable_changed,
         )
 
         # TF Listener
@@ -87,9 +88,13 @@ class DashboardGatewayNode(Node):
         # Teleop publisher to documented pre-gate topic
         self.cmd_vel_pub = self.create_publisher(Twist, self.target_topic, 10)
 
-        # Hardware arm/disarm service clients
+        # Hardware safety deadman publisher for lyra_cmd_vel_gate (button 4)
+        self.joy_pub = self.create_publisher(Joy, "/joy", 10)
+
+        # Hardware arm/disarm/estop service clients
         self.arm_client = self.create_client(Trigger, "/lyra/arm")
         self.disarm_client = self.create_client(Trigger, "/lyra/disarm")
+        self.estop_client = self.create_client(Trigger, "/lyra/emergency_stop")
 
         # Nav2 Action Client
         self.nav2_client = ActionClient(self, NavigateToPose, "navigate_to_pose")
@@ -127,6 +132,7 @@ class DashboardGatewayNode(Node):
         self._calibration_state = "UNCALIBRATED"
         self._slam_status = "NO_MAP"
         self._latest_map_data: Optional[Dict[str, Any]] = None
+        self._latest_occupancy_grid: Optional[OccupancyGrid] = None
         self._robot_armed = False
 
         # Subscriptions
@@ -277,6 +283,7 @@ class DashboardGatewayNode(Node):
 
     def _map_cb(self, msg: OccupancyGrid) -> None:
         self._slam_status = "MAPPING"
+        self._latest_occupancy_grid = msg
         width = msg.info.width
         height = msg.info.height
         resolution = msg.info.resolution
@@ -331,6 +338,28 @@ class DashboardGatewayNode(Node):
             self._lidar_scan_count = 0
             self._last_fps_calc = now
 
+        # Update autonomous navigation state based on live prerequisites if not actively in flight
+        if self.supervisor.mode == ControlMode.AUTONOMOUS:
+            current_state = self.supervisor.nav_state
+            if current_state not in (
+                NavState.GOAL_PENDING,
+                NavState.GOAL_ACCEPTED,
+                NavState.NAVIGATING,
+            ):
+                ready, blockers = self.check_nav_prerequisites()
+                if not self.supervisor.motion_enabled:
+                    self.supervisor.set_nav_state(NavState.MOTION_INHIBITED, blockers)
+                elif not self.nav2_client.server_is_ready():
+                    self.supervisor.set_nav_state(NavState.NAVIGATION_UNAVAILABLE, blockers)
+                elif not ready:
+                    pose = self._lookup_robot_pose()
+                    if not pose.get("valid") or pose.get("frame") != "map":
+                        self.supervisor.set_nav_state(NavState.WAITING_FOR_LOCALIZATION, blockers)
+                    else:
+                        self.supervisor.set_nav_state(NavState.READY, blockers)
+                else:
+                    self.supervisor.set_nav_state(NavState.READY, [])
+
         state = self.get_full_state()
         DashboardWebSocketHandler.broadcast_json({"type": "telemetry", "state": state})
 
@@ -342,10 +371,20 @@ class DashboardGatewayNode(Node):
 
         # Query TF robot pose
         pose = self._lookup_robot_pose()
+        sup_status = self.supervisor.get_status_dict()
 
         return {
-            "mode": self.supervisor.mode.value,
-            "is_moving": self.supervisor.is_moving,
+            "mode": sup_status["mode"],
+            "motion_enabled": sup_status["motion_enabled"],
+            "is_moving": sup_status["is_moving"],
+            "linear_velocity": sup_status["linear_velocity"],
+            "angular_velocity": sup_status["angular_velocity"],
+            "deadman_active": sup_status["deadman_active"],
+            "watchdog_healthy": sup_status["watchdog_healthy"],
+            "watchdog_age_ms": sup_status["watchdog_age_ms"],
+            "active_session": sup_status["active_session"],
+            "nav_state": sup_status["nav_state"],
+            "nav_blockers": sup_status["nav_blockers"],
             "camera_fps": self._camera_fps if camera_online else 0.0,
             "detector_mode": self._detector_mode,
             "detector_latency_ms": self._detector_latency_ms,
@@ -364,7 +403,6 @@ class DashboardGatewayNode(Node):
                 "calibration": self._calibration_state,
                 "robot_armed": self._robot_armed,
             },
-            "nav_state": self._nav_state,
         }
 
     def _lookup_robot_pose(self) -> Dict[str, Any]:
@@ -390,60 +428,144 @@ class DashboardGatewayNode(Node):
     # =========================================================================
     # Supervisor Callbacks & Motion Output
     # =========================================================================
-    def _publish_velocity(self, linear_x: float, angular_z: float) -> None:
-        """Publish velocity command to documented pre-gate topic /cmd_vel_joy."""
+    def _publish_velocity(self, linear_x: float, angular_z: float, deadman: bool = False) -> None:
+        """Publish velocity command to /cmd_vel_joy and deadman heartbeat to /joy."""
         if not rclpy.ok():
             return
         try:
-            msg = Twist()
-            msg.linear.x = float(linear_x)
-            msg.angular.z = float(angular_z)
-            self.cmd_vel_pub.publish(msg)
+            twist = Twist()
+            twist.linear.x = float(linear_x)
+            twist.angular.z = float(angular_z)
+            self.cmd_vel_pub.publish(twist)
+
+            # Publish Joy message for lyra_cmd_vel_gate (deadman on button 4, turbo on button 5)
+            joy = Joy()
+            joy.header.stamp = self.get_clock().now().to_msg()
+            joy.buttons = [0, 0, 0, 0, 1 if deadman else 0, 0]
+            joy.axes = [0.0, 0.0, 0.0, 0.0]
+            self.joy_pub.publish(joy)
         except Exception:
             pass
 
     def _handle_mode_changed(self, old_mode: ControlMode, new_mode: ControlMode) -> None:
         self.get_logger().info(f"Operator control mode transition: {old_mode.value} -> {new_mode.value}")
+        self._cancel_nav_internal()
+        self._publish_velocity(0.0, 0.0, False)
 
-        if new_mode == ControlMode.STOPPED:
-            self._cancel_nav_internal()
+        if new_mode in (ControlMode.MANUAL, ControlMode.AUTONOMOUS):
+            self._call_arm()
+        elif new_mode == ControlMode.STOPPED:
             self._call_disarm()
 
-        elif new_mode == ControlMode.MANUAL:
-            self._cancel_nav_internal()
+    def _handle_motion_enable_changed(self, enabled: bool) -> None:
+        self.get_logger().info(f"Operator motion enablement changed: enabled={enabled}")
+        if enabled:
             self._call_arm()
-
-        elif new_mode == ControlMode.AUTONOMOUS:
-            self._publish_velocity(0.0, 0.0)
-            self._call_arm()
+        else:
+            self._call_disarm()
+            self._publish_velocity(0.0, 0.0, False)
+            if self.supervisor.mode == ControlMode.AUTONOMOUS:
+                self._cancel_nav_internal()
 
     def _handle_stop_requested(self) -> None:
-        self._publish_velocity(0.0, 0.0)
+        self._publish_velocity(0.0, 0.0, False)
         self._cancel_nav_internal()
         self._call_disarm()
+        self._call_estop()
 
     def _call_arm(self) -> None:
-        if self.arm_client.service_is_ready():
+        try:
             req = Trigger.Request()
             self.arm_client.call_async(req)
+        except Exception as e:
+            self.get_logger().warn(f"Failed to call /lyra/arm: {e}")
 
     def _call_disarm(self) -> None:
-        if self.disarm_client.service_is_ready():
+        try:
             req = Trigger.Request()
             self.disarm_client.call_async(req)
+        except Exception as e:
+            self.get_logger().warn(f"Failed to call /lyra/disarm: {e}")
+
+    def _call_estop(self) -> None:
+        try:
+            req = Trigger.Request()
+            self.estop_client.call_async(req)
+        except Exception as e:
+            self.get_logger().warn(f"Failed to call /lyra/emergency_stop: {e}")
 
     # =========================================================================
-    # Autonomous Navigation (Nav2 Action Integration)
+    # Autonomous Navigation (Nav2 Action Integration & Validation)
     # =========================================================================
-    def dispatch_nav_goal(self, x: float, y: float, yaw: float) -> None:
+    def check_nav_prerequisites(self) -> Tuple[bool, List[str]]:
+        """Verify all navigation preconditions and return any active blockers."""
+        blockers = []
         if self.supervisor.mode != ControlMode.AUTONOMOUS:
-            self.get_logger().warn("Rejected nav goal: Mode is not AUTONOMOUS")
-            return
+            blockers.append("Operating mode is not AUTONOMOUS")
 
-        if not self.nav2_client.wait_for_server(timeout_sec=0.5):
-            self.get_logger().warn("Nav2 navigate_to_pose action server unavailable")
-            self._nav_state = "NAV2_UNAVAILABLE"
-            return
+        if not self.supervisor.motion_enabled:
+            blockers.append("Motion is disabled (Operator must Enable Motion)")
+
+        now = time.monotonic()
+        if (now - self._last_lidar_time) > 1.5:
+            blockers.append("LiDAR /scan data is offline or stale")
+
+        if self._latest_occupancy_grid is None:
+            blockers.append("No occupancy grid map received on /map")
+
+        pose = self._lookup_robot_pose()
+        if not pose.get("valid") or pose.get("frame") != "map":
+            blockers.append("Robot localization in 'map' frame is unavailable")
+
+        if not self.nav2_client.server_is_ready():
+            blockers.append("Nav2 navigate_to_pose action server is unavailable")
+
+        return len(blockers) == 0, blockers
+
+    def _validate_goal_against_map(self, x: float, y: float) -> Tuple[bool, str]:
+        """Validate target waypoint against occupancy map bounds and obstacle costs."""
+        if self._latest_occupancy_grid is None:
+            return True, "No map available to validate against"
+
+        info = self._latest_occupancy_grid.info
+        ox = info.origin.position.x
+        oy = info.origin.position.y
+        res = info.resolution
+        w = info.width
+        h = info.height
+
+        gx = int((x - ox) / res)
+        gy = int((y - oy) / res)
+
+        if gx < 0 or gx >= w or gy < 0 or gy >= h:
+            return False, f"Goal ({x:.2f}, {y:.2f}) is outside map bounds [{ox:.2f}..{ox+w*res:.2f}, {oy:.2f}..{oy+h*res:.2f}]"
+
+        idx = gy * w + gx
+        data = self._latest_occupancy_grid.data
+        if 0 <= idx < len(data):
+            cell_val = data[idx]
+            if cell_val > 50:
+                return False, f"Goal ({x:.2f}, {y:.2f}) is an obstacle (cost={cell_val})"
+
+        return True, "Goal coordinates valid in free/open space"
+
+    def dispatch_nav_goal(
+        self, x: float, y: float, yaw: float, session_id: Optional[str] = None
+    ) -> Tuple[bool, str]:
+        """Validate prerequisites, check map clearance, and dispatch goal to Nav2."""
+        if session_id and self.supervisor.active_session_id and self.supervisor.active_session_id != session_id:
+            return False, "Rejected: another operator session holds the active control lease"
+
+        ready, blockers = self.check_nav_prerequisites()
+        if not ready:
+            err = f"Cannot dispatch navigation goal: {'; '.join(blockers)}"
+            self.get_logger().warn(err)
+            return False, err
+
+        valid, reason = self._validate_goal_against_map(x, y)
+        if not valid:
+            self.get_logger().warn(f"Goal validation failed: {reason}")
+            return False, reason
 
         # Cancel any previous goal
         self._cancel_nav_internal()
@@ -460,14 +582,15 @@ class DashboardGatewayNode(Node):
         goal_msg.pose.pose.orientation.z = math.sin(half_yaw)
         goal_msg.pose.pose.orientation.w = math.cos(half_yaw)
 
-        self._nav_state = "GOAL_PENDING"
+        self.supervisor.set_nav_state(NavState.GOAL_PENDING, [])
         send_future = self.nav2_client.send_goal_async(goal_msg, feedback_callback=self._nav_feedback_cb)
         send_future.add_done_callback(self._nav_goal_response_cb)
         self.get_logger().info(f"Dispatched Nav2 goal to (x={x:.2f}, y={y:.2f}, yaw={yaw:.2f})")
+        return True, "Navigation goal dispatched successfully"
 
     def cancel_nav_goal(self) -> None:
         self._cancel_nav_internal()
-        self._nav_state = "GOAL_CANCELED"
+        self.supervisor.set_nav_state(NavState.GOAL_CANCELED, [])
 
     def _cancel_nav_internal(self) -> None:
         if self._current_nav_goal_handle:
@@ -481,16 +604,16 @@ class DashboardGatewayNode(Node):
         goal_handle = future.result()
         if not goal_handle.accepted:
             self.get_logger().warn("Nav2 rejected navigation goal")
-            self._nav_state = "GOAL_REJECTED"
+            self.supervisor.set_nav_state(NavState.GOAL_FAILED, ["Nav2 planner/controller rejected goal"])
             return
 
         self._current_nav_goal_handle = goal_handle
-        self._nav_state = "NAVIGATING"
+        self.supervisor.set_nav_state(NavState.NAVIGATING, [])
         result_future = goal_handle.get_result_async()
         result_future.add_done_callback(self._nav_result_cb)
 
     def _nav_feedback_cb(self, feedback_msg: Any) -> None:
-        self._nav_state = "NAVIGATING"
+        self.supervisor.set_nav_state(NavState.NAVIGATING, [])
 
     def _nav_result_cb(self, future: Any) -> None:
         result = future.result()
@@ -498,12 +621,12 @@ class DashboardGatewayNode(Node):
         self._current_nav_goal_handle = None
 
         if status == 4:  # STATUS_SUCCEEDED
-            self._nav_state = "GOAL_REACHED"
+            self.supervisor.set_nav_state(NavState.GOAL_REACHED, [])
             self.get_logger().info("Nav2 Goal Reached Successfully!")
         elif status == 5:  # STATUS_CANCELED
-            self._nav_state = "GOAL_CANCELED"
+            self.supervisor.set_nav_state(NavState.GOAL_CANCELED, [])
         else:
-            self._nav_state = "GOAL_FAILED"
+            self.supervisor.set_nav_state(NavState.GOAL_FAILED, [f"Nav2 terminated with code {status}"])
             self.get_logger().warn(f"Nav2 Goal terminated with status code {status}")
 
     def destroy_node(self) -> None:
