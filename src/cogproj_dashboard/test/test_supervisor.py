@@ -15,8 +15,8 @@ class TestControlSupervisor(unittest.TestCase):
         self.stop_requested_count = 0
 
         self.supervisor = ControlSupervisor(
-            max_linear_x=0.10,
-            max_angular_z=0.25,
+            max_linear_x=0.35,
+            max_angular_z=0.80,
             command_timeout_sec=0.15,
             on_velocity_output=lambda lin, ang: self.output_velocities.append((lin, ang)),
             on_mode_changed=lambda old, new: self.mode_changes.append((old, new)),
@@ -64,19 +64,19 @@ class TestControlSupervisor(unittest.TestCase):
         """Velocities exceeding configured bounds must be clamped."""
         self.supervisor.set_mode("MANUAL")
 
-        # Exceed positive limits (0.50 m/s > 0.10 m/s, 1.0 rad/s > 0.25 rad/s)
+        # Exceed positive limits (0.50 m/s > 0.35 m/s, 1.0 rad/s > 0.80 rad/s)
         ok, msg = self.supervisor.receive_teleop_command(0.50, 1.0, deadman=True)
         self.assertTrue(ok)
         last_lin, last_ang = self.output_velocities[-1]
-        self.assertAlmostEqual(last_lin, 0.10)
-        self.assertAlmostEqual(last_ang, 0.25)
+        self.assertAlmostEqual(last_lin, 0.35)
+        self.assertAlmostEqual(last_ang, 0.80)
 
-        # Exceed negative limits (-0.50 m/s < -0.10 m/s, -1.0 rad/s < -0.25 rad/s)
+        # Exceed negative limits (-0.50 m/s < -0.35 m/s, -1.0 rad/s < -0.80 rad/s)
         ok, msg = self.supervisor.receive_teleop_command(-0.50, -1.0, deadman=True)
         self.assertTrue(ok)
         last_lin, last_ang = self.output_velocities[-1]
-        self.assertAlmostEqual(last_lin, -0.10)
-        self.assertAlmostEqual(last_ang, -0.25)
+        self.assertAlmostEqual(last_lin, -0.35)
+        self.assertAlmostEqual(last_ang, -0.80)
 
     def test_deadman_switch_release(self):
         """Releasing deadman switch must immediately zero output velocity."""
@@ -122,6 +122,22 @@ class TestControlSupervisor(unittest.TestCase):
         self.supervisor.set_mode("MANUAL")
         self.supervisor.handle_disconnect()
         self.assertEqual(self.supervisor.mode, ControlMode.STOPPED)
+
+    def test_deadman_callback_flag(self):
+        """Verify on_velocity_output receives deadman=True on motion and False on stop."""
+        received = []
+        sup = ControlSupervisor(
+            on_velocity_output=lambda lin, ang, deadman: received.append((lin, ang, deadman))
+        )
+        sup.set_mode("MANUAL")
+        # On mode switch, zero motion locked emits deadman=False
+        self.assertEqual(received[-1], (0.0, 0.0, False))
+
+        sup.receive_teleop_command(0.08, 0.12, deadman=True)
+        self.assertEqual(received[-1], (0.08, 0.12, True))
+
+        sup.receive_teleop_command(0.08, 0.12, deadman=False)
+        self.assertEqual(received[-1], (0.0, 0.0, False))
 
 
 if __name__ == "__main__":

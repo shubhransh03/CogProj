@@ -15,8 +15,8 @@ const activeKeys = new Set();
 let teleopTimer = null;
 
 // Teleop Speed Ceilings
-const MAX_LINEAR_VEL = 0.10;   // m/s
-const MAX_ANGULAR_VEL = 0.25;  // rad/s
+const MAX_LINEAR_VEL = 0.35;   // m/s
+const MAX_ANGULAR_VEL = 0.80;  // rad/s
 
 // DOM Elements
 const connStatus = document.getElementById("conn-status");
@@ -408,33 +408,70 @@ btnCancelGoal.addEventListener("click", () => {
   }
 });
 
+// Teleoperation Key Normalization & Mappings
+const KEY_NORMALIZE = {
+  "w": "w", "arrowup": "w",
+  "s": "s", "arrowdown": "s",
+  "a": "a", "arrowleft": "a",
+  "d": "d", "arrowright": "d",
+  " ": " "
+};
+
+function normalizeKey(key) {
+  return KEY_NORMALIZE[key.toLowerCase()] || null;
+}
+
+function startTeleopHeartbeat() {
+  if (teleopTimer) return;
+  teleopTimer = setInterval(() => {
+    if (currentMode !== "MANUAL" || activeKeys.size === 0) {
+      stopTeleop();
+    } else {
+      sendTeleopFromKeys();
+    }
+  }, 100); // 10 Hz heartbeat to keep safety gate & supervisor alive
+}
+
+function stopTeleopHeartbeat() {
+  if (teleopTimer) {
+    clearInterval(teleopTimer);
+    teleopTimer = null;
+  }
+}
+
 // Teleoperation Keyboard Controls
 window.addEventListener("keydown", (e) => {
   if (currentMode !== "MANUAL") return;
-  const key = e.key.toLowerCase();
+  const nKey = normalizeKey(e.key);
+  if (!nKey) return;
 
-  if (["w", "a", "s", "d", " "].includes(key)) {
-    e.preventDefault();
-    if (!activeKeys.has(key)) {
-      activeKeys.add(key);
-      highlightKey(key, true);
-      sendTeleopFromKeys();
-    }
+  e.preventDefault();
+
+  if (nKey === " ") {
+    stopTeleop();
+    return;
+  }
+
+  if (!activeKeys.has(nKey)) {
+    activeKeys.add(nKey);
+    highlightKey(nKey, true);
+    sendTeleopFromKeys();
+    startTeleopHeartbeat();
   }
 });
 
 window.addEventListener("keyup", (e) => {
   if (currentMode !== "MANUAL") return;
-  const key = e.key.toLowerCase();
+  const nKey = normalizeKey(e.key);
+  if (!nKey) return;
 
-  if (["w", "a", "s", "d", " "].includes(key)) {
-    activeKeys.delete(key);
-    highlightKey(key, false);
-    if (activeKeys.size === 0) {
-      stopTeleop();
-    } else {
-      sendTeleopFromKeys();
-    }
+  activeKeys.delete(nKey);
+  highlightKey(nKey, false);
+
+  if (activeKeys.size === 0 || activeKeys.has(" ")) {
+    stopTeleop();
+  } else {
+    sendTeleopFromKeys();
   }
 });
 
@@ -457,10 +494,19 @@ function sendTeleopFromKeys() {
   let lin = 0.0;
   let ang = 0.0;
 
-  if (activeKeys.has("w")) lin += MAX_LINEAR_VEL;
-  if (activeKeys.has("s")) lin -= MAX_LINEAR_VEL;
-  if (activeKeys.has("a")) ang += MAX_ANGULAR_VEL;
-  if (activeKeys.has("d")) ang -= MAX_ANGULAR_VEL;
+  // Opposing key cancellation
+  const hasForward = activeKeys.has("w");
+  const hasBackward = activeKeys.has("s");
+  const hasLeft = activeKeys.has("a");
+  const hasRight = activeKeys.has("d");
+
+  if (hasForward && !hasBackward) lin = MAX_LINEAR_VEL;
+  else if (hasBackward && !hasForward) lin = -MAX_LINEAR_VEL;
+  else lin = 0.0;
+
+  if (hasLeft && !hasRight) ang = MAX_ANGULAR_VEL;
+  else if (hasRight && !hasLeft) ang = -MAX_ANGULAR_VEL;
+  else ang = 0.0;
 
   const deadman = (lin !== 0.0 || ang !== 0.0);
 
@@ -478,6 +524,7 @@ function sendTeleopFromKeys() {
 }
 
 function stopTeleop() {
+  stopTeleopHeartbeat();
   activeKeys.clear();
   document.querySelectorAll(".btn-key").forEach(b => b.classList.remove("active-key"));
 
@@ -504,20 +551,37 @@ function highlightKey(key, active) {
 // On-screen Button Pointer Events
 document.querySelectorAll(".btn-key").forEach(btn => {
   const key = btn.getAttribute("data-key");
-  btn.addEventListener("mousedown", () => {
+  const onStart = (e) => {
+    e.preventDefault();
     if (currentMode === "MANUAL") {
+      if (key === " ") {
+        stopTeleop();
+        return;
+      }
       activeKeys.add(key);
       highlightKey(key, true);
       sendTeleopFromKeys();
+      startTeleopHeartbeat();
     }
-  });
-  btn.addEventListener("mouseup", () => {
+  };
+  const onEnd = (e) => {
+    e.preventDefault();
     if (currentMode === "MANUAL") {
       activeKeys.delete(key);
       highlightKey(key, false);
-      if (activeKeys.size === 0) stopTeleop();
+      if (activeKeys.size === 0) {
+        stopTeleop();
+      } else {
+        sendTeleopFromKeys();
+      }
     }
-  });
+  };
+
+  btn.addEventListener("mousedown", onStart);
+  btn.addEventListener("mouseup", onEnd);
+  btn.addEventListener("mouseleave", onEnd);
+  btn.addEventListener("touchstart", onStart, { passive: false });
+  btn.addEventListener("touchend", onEnd, { passive: false });
 });
 
 // Initialization

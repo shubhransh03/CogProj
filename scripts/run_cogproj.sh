@@ -304,7 +304,24 @@ else
     echo -e "  • Safety Gate    : ${GREEN}[REUSING]${NC} cmd_vel_gate already active"
 fi
 
-# 5e. Real SLAM Toolbox
+# 5e. STM32 Motor Hardware Bridge
+if ! pgrep -f "lyra_node" >/dev/null 2>&1; then
+    LYRA_CONF="/home/veerobot/lyra_ws/src/lyra_bridge/config/lyra_params.yaml"
+    if [[ -e /dev/ttyAMA0 && -f "$LYRA_CONF" ]]; then
+        echo -e "  • Motor Bridge   : ${BLUE}[STARTING]${NC} Launching lyra_bridge on /dev/ttyAMA0..."
+        ros2 run lyra_bridge lyra_node --ros-args --params-file "$LYRA_CONF" > "$LOG_DIR/lyra_bridge.log" 2>&1 &
+        BRIDGE_PID=$!
+        track_pid "$BRIDGE_PID"
+        sleep 1
+        echo -e "    ${GREEN}[✓] lyra_bridge active (PID $BRIDGE_PID)${NC}"
+    else
+        echo -e "  • Motor Bridge   : ${YELLOW}[STANDBY]${NC} /dev/ttyAMA0 or lyra_params.yaml not found"
+    fi
+else
+    echo -e "  • Motor Bridge   : ${GREEN}[REUSING]${NC} lyra_bridge already active"
+fi
+
+# 5f. Real SLAM Toolbox
 MAP_PUBS=$(ros2 topic info /map 2>/dev/null | awk '/Publisher count:/ {print $3}' || echo "0")
 if [[ -z "$MAP_PUBS" ]]; then MAP_PUBS=0; fi
 
@@ -376,7 +393,7 @@ echo -e "  ${BOLD}ssh -L 8080:127.0.0.1:8080 -L 8765:127.0.0.1:8765 veerobot@192
 echo -e "\n${YELLOW}${BOLD}Operator Instructions:${NC}"
 echo -e "  1. Open http://localhost:8080 in your laptop browser."
 echo -e "  2. The system starts in STOPPED mode. To drive manually, click '🎮 MANUAL / TELEOP'."
-echo -e "  3. Use W/A/S/D keys to move (linear speed clamped to <= 0.10 m/s; angular <= 0.25 rad/s)."
+echo -e "  3. Use W/A/S/D keys to move (linear speed clamped to <= 0.35 m/s; angular <= 0.80 rad/s)."
 echo -e "  4. Press SPACE or release keys to stop immediately."
 echo -e "  5. Press '🚨 EMERGENCY STOP' to disarm motors and lock into STOPPED mode."
 echo -e "  6. Press Ctrl+C in this terminal to shut down managed components cleanly."

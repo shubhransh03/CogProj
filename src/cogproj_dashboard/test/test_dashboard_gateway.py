@@ -30,6 +30,35 @@ class TestDashboardGatewayNode(unittest.TestCase):
         self.assertEqual(self.node.cmd_vel_pub.topic_name, "/cmd_vel_joy")
         self.assertNotEqual(self.node.cmd_vel_pub.topic_name, "/cmd_vel")
 
+    def test_joy_publisher_and_deadman_button(self):
+        """Gateway must publish deadman button index 4 to /joy for lyra_cmd_vel_gate."""
+        self.assertEqual(self.node.joy_pub.topic_name, "/joy")
+
+        published_msgs = []
+        original_pub = self.node.joy_pub.publish
+        self.node.joy_pub.publish = lambda msg: published_msgs.append(msg)
+
+        try:
+            # When deadman is True
+            self.node._publish_velocity(0.08, 0.15, deadman=True)
+            self.assertTrue(len(published_msgs) >= 1)
+            last_msg = published_msgs[-1]
+            self.assertEqual(len(last_msg.buttons), 6)
+            self.assertEqual(last_msg.buttons[4], 1)
+
+            # When deadman is False
+            self.node._publish_velocity(0.0, 0.0, deadman=False)
+            last_msg = published_msgs[-1]
+            self.assertEqual(last_msg.buttons[4], 0)
+        finally:
+            self.node.joy_pub.publish = original_pub
+
+    def test_lyra_services_configured(self):
+        """Gateway must configure arm, disarm, and emergency_stop clients."""
+        self.assertEqual(self.node.arm_client.srv_name, "/lyra/arm")
+        self.assertEqual(self.node.disarm_client.srv_name, "/lyra/disarm")
+        self.assertEqual(self.node.estop_client.srv_name, "/lyra/emergency_stop")
+
     def test_initial_state_is_stopped(self):
         """Initial state must be STOPPED with zero motion."""
         state = self.node.get_full_state()

@@ -3,7 +3,7 @@
 Enforces strict safety boundaries:
 1. Mutual exclusion between STOPPED, MANUAL, and AUTONOMOUS modes.
 2. Default state is always STOPPED.
-3. Velocity clamping (linear <= 0.10 m/s, angular <= 0.25 rad/s).
+3. Velocity clamping (linear <= 0.35 m/s, angular <= 0.80 rad/s).
 4. Deadman switch enforcement (must be active for motion).
 5. Watchdog timeout: auto-stop if no command received for 0.3 seconds.
 6. Immediate stop on key release, focus loss, tab hide, or connection drop.
@@ -26,10 +26,10 @@ class ControlSupervisor:
 
     def __init__(
         self,
-        max_linear_x: float = 0.10,
-        max_angular_z: float = 0.25,
+        max_linear_x: float = 0.35,
+        max_angular_z: float = 0.80,
         command_timeout_sec: float = 0.30,
-        on_velocity_output: Optional[Callable[[float, float], None]] = None,
+        on_velocity_output: Optional[Callable[[float, float, bool], None]] = None,
         on_mode_changed: Optional[Callable[[ControlMode, ControlMode], None]] = None,
         on_stop_requested: Optional[Callable[[], None]] = None,
     ) -> None:
@@ -47,6 +47,15 @@ class ControlSupervisor:
         self._last_command_time = 0.0
         self._current_linear_x = 0.0
         self._current_angular_z = 0.0
+
+    def _emit_velocity(self, linear_x: float, angular_z: float, deadman: bool) -> None:
+        """Call on_velocity_output supporting both (lin, ang, deadman) and (lin, ang) signatures."""
+        if not self._on_velocity_output:
+            return
+        try:
+            self._on_velocity_output(linear_x, angular_z, deadman)
+        except TypeError:
+            self._on_velocity_output(linear_x, angular_z)
 
     @property
     def mode(self) -> ControlMode:
@@ -101,8 +110,7 @@ class ControlSupervisor:
             self._current_linear_x = clamped_lin
             self._current_angular_z = clamped_ang
 
-        if self._on_velocity_output:
-            self._on_velocity_output(clamped_lin, clamped_ang)
+        self._emit_velocity(clamped_lin, clamped_ang, True)
 
         return True, f"Applied (lin={clamped_lin:.2f}, ang={clamped_ang:.2f})"
 
@@ -139,5 +147,4 @@ class ControlSupervisor:
         self._deadman_active = False
         self._current_linear_x = 0.0
         self._current_angular_z = 0.0
-        if self._on_velocity_output:
-            self._on_velocity_output(0.0, 0.0)
+        self._emit_velocity(0.0, 0.0, False)

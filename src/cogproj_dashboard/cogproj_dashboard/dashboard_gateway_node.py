@@ -16,7 +16,7 @@ from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy
 from geometry_msgs.msg import PoseStamped, Twist
 from nav_msgs.msg import OccupancyGrid
-from sensor_msgs.msg import CameraInfo, CompressedImage, LaserScan
+from sensor_msgs.msg import CameraInfo, CompressedImage, Joy, LaserScan
 from std_msgs.msg import Bool
 from std_srvs.srv import Trigger
 import tf2_ros
@@ -42,8 +42,8 @@ class DashboardGatewayNode(Node):
         # Declare parameters
         self.declare_parameter("web_host", "127.0.0.1")
         self.declare_parameter("web_port", 8080)
-        self.declare_parameter("max_linear_x", 0.10)
-        self.declare_parameter("max_angular_z", 0.25)
+        self.declare_parameter("max_linear_x", 0.35)
+        self.declare_parameter("max_angular_z", 0.80)
         self.declare_parameter("command_timeout_sec", 0.30)
         self.declare_parameter("target_cmd_vel_topic", "/cmd_vel_joy")
         self.declare_parameter("enable_web_server", True)
@@ -86,10 +86,13 @@ class DashboardGatewayNode(Node):
 
         # Teleop publisher to documented pre-gate topic
         self.cmd_vel_pub = self.create_publisher(Twist, self.target_topic, 10)
+        # Joystick deadman publisher for lyra_cmd_vel_gate (deadman = button index 4)
+        self.joy_pub = self.create_publisher(Joy, "/joy", 10)
 
-        # Hardware arm/disarm service clients
+        # Hardware arm/disarm/estop service clients
         self.arm_client = self.create_client(Trigger, "/lyra/arm")
         self.disarm_client = self.create_client(Trigger, "/lyra/disarm")
+        self.estop_client = self.create_client(Trigger, "/lyra/emergency_stop")
 
         # Nav2 Action Client
         self.nav2_client = ActionClient(self, NavigateToPose, "navigate_to_pose")
@@ -390,8 +393,8 @@ class DashboardGatewayNode(Node):
     # =========================================================================
     # Supervisor Callbacks & Motion Output
     # =========================================================================
-    def _publish_velocity(self, linear_x: float, angular_z: float) -> None:
-        """Publish velocity command to documented pre-gate topic /cmd_vel_joy."""
+    def _publish_velocity(self, linear_x: float, angular_z: float, deadman: bool = False) -> None:
+        """Publish velocity command to /cmd_vel_joy and deadman assert to /joy."""
         if not rclpy.ok():
             return
         try:
@@ -399,6 +402,14 @@ class DashboardGatewayNode(Node):
             msg.linear.x = float(linear_x)
             msg.angular.z = float(angular_z)
             self.cmd_vel_pub.publish(msg)
+
+            joy_msg = Joy()
+            joy_msg.header.stamp = self.get_clock().now().to_msg()
+            joy_msg.header.frame_id = "cogproj_dashboard"
+            joy_msg.axes = [0.0, 0.0, 0.0, 0.0]
+            # Buttons: [0, 1, 2, 3, 4 (deadman), 5 (turbo)]
+            joy_msg.buttons = [0, 0, 0, 0, 1 if deadman else 0, 0]
+            self.joy_pub.publish(joy_msg)
         except Exception:
             pass
 
@@ -414,13 +425,14 @@ class DashboardGatewayNode(Node):
             self._call_arm()
 
         elif new_mode == ControlMode.AUTONOMOUS:
-            self._publish_velocity(0.0, 0.0)
+            self._publish_velocity(0.0, 0.0, False)
             self._call_arm()
 
     def _handle_stop_requested(self) -> None:
-        self._publish_velocity(0.0, 0.0)
+        self._publish_velocity(0.0, 0.0, False)
         self._cancel_nav_internal()
         self._call_disarm()
+        self._call_estop()
 
     def _call_arm(self) -> None:
         if self.arm_client.service_is_ready():
@@ -431,6 +443,11 @@ class DashboardGatewayNode(Node):
         if self.disarm_client.service_is_ready():
             req = Trigger.Request()
             self.disarm_client.call_async(req)
+
+    def _call_estop(self) -> None:
+        if hasattr(self, "estop_client") and self.estop_client.service_is_ready():
+            req = Trigger.Request()
+            self.estop_client.call_async(req)
 
     # =========================================================================
     # Autonomous Navigation (Nav2 Action Integration)

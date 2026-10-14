@@ -21,14 +21,14 @@ def generate_launch_description():
 
     max_linear_x_arg = DeclareLaunchArgument(
         "max_linear_x",
-        default_value="0.10",
-        description="Ceiling linear velocity in m/s (default: 0.10)",
+        default_value="0.35",
+        description="Ceiling linear velocity in m/s (default: 0.35)",
     )
 
     max_angular_z_arg = DeclareLaunchArgument(
         "max_angular_z",
-        default_value="0.25",
-        description="Ceiling angular velocity in rad/s (default: 0.25)",
+        default_value="0.80",
+        description="Ceiling angular velocity in rad/s (default: 0.80)",
     )
 
     target_topic_arg = DeclareLaunchArgument(
